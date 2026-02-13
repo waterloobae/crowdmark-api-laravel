@@ -1,0 +1,1 @@
+<div id="crowdmarkdashboard_logger" style="position: relative; background-color: #f1f1f1; border: 1px solid #d3d3d3; padding: 10px; z-index: 1000; overflow: auto; max-height: 200px; width: 80%;"></div>

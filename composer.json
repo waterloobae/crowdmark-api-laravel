@@ -1,0 +1,14 @@
+{
+    "name": "waterloobae/crowdmarkdashboard",
+    "description": "A dashboard for crowdmark",
+    "license": "MIT",
+    "require": {
+        "setasign/fpdf": "^1.8",
+        "setasign/fpdi": "^2.3"
+    },
+    "autoload": {
+        "psr-4": {
+            "Waterloobae\\CrowdmarkDashboard\\": "src"
+        }
+    }
+}
