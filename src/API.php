@@ -86,6 +86,8 @@ class API
         $batches = array_chunk($big_end_points, $batch_size);
 
         foreach ($batches as $i => $end_points) {
+            $batchStart = microtime(true);
+
             $responses = Http::baseUrl($this->url)
                 ->acceptJson()
                 ->pool(function (Pool $pool) use ($end_points) {
@@ -109,6 +111,14 @@ class API
                 ) {
                     $this->api_responses[$i * $batch_size + $j] = json_decode($response->body());
                 }
+            }
+
+            // Throttle: wait out the remainder of the 1-second window so we
+            // never exceed 10 requests per second across batches.
+            $elapsed = microtime(true) - $batchStart;
+            $remaining = 1.0 - $elapsed;
+            if ($remaining > 0) {
+                usleep((int) ($remaining * 1_000_000));
             }
         }
     }
