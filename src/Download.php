@@ -37,59 +37,53 @@ class Download{
     }
 
     public function downloadPage() {
-        $this->crowdmark->downloadPagesByPageNumber($this->assessment_ids, $this->page_number);
+        return $this->crowdmark->downloadPagesByPageNumber($this->assessment_ids, $this->page_number);
     }
 
     public function generateStudentInfo() {
-        $this->crowdmark->generateStudentInformation($this->assessment_ids);
+        return $this->crowdmark->generateStudentInformation($this->assessment_ids);
     }
 
     public function generateStudentEmailList() {
-        $this->crowdmark->generateStudentEmailList($this->assessment_ids);
+        return $this->crowdmark->generateStudentEmailList($this->assessment_ids);
     }
 
     public function generateGradersGradingList(){
-        $this->crowdmark->generateGradersGradingList($this->assessment_ids);
+        return $this->crowdmark->generateGradersGradingList($this->assessment_ids);
     }
 
     public function generateGradingStatus(){
-        $this->crowdmark->generateGradingStatus($this->assessment_ids);
+        return $this->crowdmark->generateGradingStatus($this->assessment_ids);
     }
 
     public function generateUploadedMatchedCounts(){
-        $this->crowdmark->generateUploadedMatchedCounts($this->assessment_ids);
+        return $this->crowdmark->generateUploadedMatchedCounts($this->assessment_ids);
     }
 
     public function generateIntegrityCheckReport(){
-        $this->crowdmark->generateIntegrityCheckReport($this->assessment_ids);
+        return $this->crowdmark->generateIntegrityCheckReport($this->assessment_ids);
     }
 
     public function createLink(){
 
         switch($this->link_type){
             case "page":
-                $this->downloadPage();
-                break;
+                return $this->downloadPage();
             case "studentinfo":
-                $this->generateStudentInfo();
-                break;
+                return $this->generateStudentInfo();
             case "studentemaillist":
-                $this->generateStudentEmailList();
-                break;
+                return $this->generateStudentEmailList();
             case "grader": 
-                $this->generateGradersGradingList();
-                break;
+                return $this->generateGradersGradingList();
             case "grading":
-                $this->generateGradingStatus();
-                break;
+                return $this->generateGradingStatus();
             case "uploadedmatched":
-                $this->generateUploadedMatchedCounts();
-                break;
+                return $this->generateUploadedMatchedCounts();
             case "integritycheck":
-                $this->generateIntegrityCheckReport();
-                break;
+                return $this->generateIntegrityCheckReport();
         }
-        
+
+        return null;
 
     }
 
@@ -97,5 +91,9 @@ class Download{
 
 $dwonload = new Download();
 $dwonload->setParams();
-$dwonload->createLink();
+$response = $dwonload->createLink();
+
+if (is_object($response) && method_exists($response, 'send')) {
+    $response->send();
+}
 

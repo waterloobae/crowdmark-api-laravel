@@ -8,6 +8,7 @@ use Waterloobae\CrowdmarkDashboard\Course;
 use Waterloobae\CrowdmarkDashboard\Assessment;
 use Waterloobae\CrowdmarkDashboard\Logger;
 
+use Illuminate\Support\Facades\Http;
 use setasign\Fpdi\Fpdi;
 
 class Crowdmark
@@ -69,33 +70,33 @@ class Crowdmark
         return $assessment_ids;
     }
 
-    public function createDownloadLinks(string $type, array $course_names, ?string $page_number = null)
+    public function createDownloadLinks(string $type, array $course_names, ?string $page_number = null): string
     {
         $valid_encoded_course_names = [];
         $webRootPath = self::$thisPath;
-        
-        ob_start();
+
+        $output = [];
         switch($type) {
             case "page":
-                echo "<h2>3. Download Booklet Pages</h2>";
+                $output[] = "<h2>3. Download Booklet Pages</h2>";
                 break;
             case "studentinfo":
-                echo "<h2>3. Download Student Information</h2>";
+                $output[] = "<h2>3. Download Student Information</h2>";
                 break;
             case "studentemaillist":
-                echo "<h2>3. Download Student Email List</h2>";
+                $output[] = "<h2>3. Download Student Email List</h2>";
                 break;
             case "grader":
-                echo "<h2>3. Download Grader's Grading List</h2>";
+                $output[] = "<h2>3. Download Grader's Grading List</h2>";
                 break;
             case "grading":
-                echo "<h2>3. Download Grading Status</h2>";
+                $output[] = "<h2>3. Download Grading Status</h2>";
                 break;
             case "uploadedmatched":
-                echo "<h2>3. Download Uploaded and Matched Counts</h2>";
+                $output[] = "<h2>3. Download Uploaded and Matched Counts</h2>";
                 break;
             case "integritycheck":
-                echo "<h2>3. Download Integrity Check Report</h2>";
+                $output[] = "<h2>3. Download Integrity Check Report</h2>";
                 break;
         }
         
@@ -113,22 +114,22 @@ class Crowdmark
             $download_link = $webRootPath."/Download.php?type=" . $type . "&course_name=" . $encoded_course_name. "&page_number=" . $page_number;
             if($is_valid) {
                 $valid_encoded_course_names[] = $encoded_course_name;    
-                echo '<a href="' . $download_link . '" download onclick="this.innerText=\'Loading '.$course_name.'. Please wait!\'; this.style.pointerEvents = \'none\';">Download (' . $course_name . ')</a><br>';
+                $output[] = '<a href="' . $download_link . '" download onclick="this.innerText=\'Loading '.$course_name.'. Please wait!\'; this.style.pointerEvents = \'none\';">Download (' . $course_name . ')</a><br>';
             } else {
-                echo "Invalid course name: " . $course_name . "<br>";
+                $output[] = "Invalid course name: " . $course_name . "<br>";
             }
 
         }
 
-        echo("<br>");
+        $output[] = "<br>";
         if(empty($valid_encoded_course_names)) {
-            echo "No valid course names found.<br>";
+            $output[] = "No valid course names found.<br>";
         }else{
             $download_link = $webRootPath."/Download.php?type=" . $type . "&course_name=" . implode("~", $valid_encoded_course_names). "&page_number=" . $page_number;
-            echo '<a href="' . $download_link . '" download onclick="this.innerText=\'Loading All Courses. Please wait!\'; this.style.pointerEvents = \'none\';">Download All Course</a><br><br>';
+            $output[] = '<a href="' . $download_link . '" download onclick="this.innerText=\'Loading All Courses. Please wait!\'; this.style.pointerEvents = \'none\';">Download All Course</a><br><br>';
         }
-        $output = ob_get_clean();
-        echo $output;
+
+        return implode('', $output);
     }
 
     //=================================
@@ -145,34 +146,32 @@ class Crowdmark
         }   
 
         $filename = 'Integrity_Check_Report-' . date('Ymd-His') . '.csv';
-        header('Content-Type: text/csv');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
-        $output = fopen('php://output', 'w');
-        fputcsv($output, ['Course Name', 'Assessment Name', 'Booklet Number', 'Booklet ID', 'Responses Count', 'Enrollment ID']);
+        $rows = [];
+        $rows[] = ['Course Name', 'Assessment Name', 'Booklet Number', 'Booklet ID', 'Responses Count', 'Enrollment ID'];
 
         foreach($assessments as $assessment) {
             $response_count = count($assessment->getQuestions());
             foreach($assessment->getBooklets() as $booklet) {
                 if( ($booklet->getResponsesCount() > 0 && $booklet->getEnrollmentId() == "NA") ||
                     ($booklet->getResponsesCount() != $response_count && $booklet->getEnrollmentId() != "NA")) {                    
-                    fputcsv($output, [
+                    $rows[] = [
                         $assessment->getCourseName(),
                         $assessment->getAssessmentName(),
                         $booklet->getBookletNumber(),
                         $booklet->getBookletId(),
                         $booklet->getResponsesCount(),
                         $booklet->getEnrollmentId()
-                    ]);
+                    ];
                 }
             }
         }
-        
-        fclose($output);
-        exit();
+
+        return $this->downloadCsv($filename, $rows);
 
     }
 
-    public function generateUploadedMatchedCounts(array $assessment_ids){
+    public function generateUploadedMatchedCounts(array $assessment_ids)
+    {
         $assessments = [];
         foreach($assessment_ids as $assessment_id) {
             $temp = new Assessment($assessment_id, $this->logger);
@@ -184,24 +183,22 @@ class Crowdmark
         $totalMatched = 0;
 
         $filename = 'Uploaded_Matched-' . date('Ymd-His') . '.csv';
-        header('Content-Type: text/csv');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
-        $output = fopen('php://output', 'w');
-        fputcsv($output, ['Assessment ID', 'Uploaded', 'Matched']);
+        $rows = [];
+        $rows[] = ['Assessment ID', 'Uploaded', 'Matched'];
 
         foreach ($assessments as $assessment) {
             $totalUploaded += $assessment->getUploadedCount();
             $totalMatched += $assessment->getMatchedCount();        
-            fputcsv($output, [
+            $rows[] = [
                 $assessment->getAssessmentName(),
                 $assessment->getUploadedCount(),
                 $assessment->getMatchedCount()
-            ]);
+            ];
         }
 
-        fputcsv($output, ['Total', $totalUploaded, $totalMatched]);
-        fclose($output);
-        exit;
+        $rows[] = ['Total', $totalUploaded, $totalMatched];
+
+        return $this->downloadCsv($filename, $rows);
     }
 
     public function generateGradingStatus(array $assessment_ids)
@@ -233,11 +230,7 @@ class Crowdmark
         }
         
         $filename = "graded_counts_" . date("Ymd-His") . ".csv";
-        
-        header('Content-Type: text/csv');
-        header('Content-Disposition: attachment;filename="' . $filename . '"');
-        
-        $output = fopen('php://output', 'w');
+        $rows = [];
         
         // Get headers from the first subarray
         $headers = ['Course'];
@@ -253,20 +246,20 @@ class Crowdmark
             $headers = array_merge($headers, array_keys($firstSubarray));
         }
 
-        fputcsv($output, $headers);
+        $rows[] = $headers;
 
         foreach ($graded_counts as $course => $counts) {
             if(is_array($counts)){
-                $row = array_merge([$course], $counts);
-                fputcsv($output, $row);
+                $rows[] = array_merge([$course], $counts);
             }
         }
-        
-        fclose($output);
-        exit;
+
+        return $this->downloadCsv($filename, $rows);
     }
 
-    public function generateGradersGradingList(array $assessment_ids){
+    public function generateGradersGradingList(array $assessment_ids)
+    {
+        $assessments = [];
         foreach($assessment_ids as $assessment_id) {
             $temp = new Assessment($assessment_id, $this->logger);
             $temp->setResponses($temp->getBooklets());
@@ -314,23 +307,20 @@ class Crowdmark
             return strcmp($grader_id_to_names[$a] ?? 'Unknown', $grader_id_to_names[$b] ?? 'Unknown');
         });
         
-        // Set headers to download the CSV file
         $filename = 'graders_' . date('Ymd-His') . '.csv';
-        header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename=' . $filename);
-        
-        // Open the output stream
-        $fp = fopen('php://output', 'w');
-        
-        // Write the header
+
+        $rows = [];
         $header = ['Grader Name', 'Grader Email'];
-        $question_labels = array_unique(array_merge(...array_values(array_map('array_keys', $grades))));
+        $question_labels = [];
+        foreach ($grades as $questions) {
+            $question_labels = array_merge($question_labels, array_keys($questions));
+        }
+        $question_labels = array_values(array_unique($question_labels));
         sort($question_labels);
-        
+
         $header = array_merge($header, array_map('strtoupper', $question_labels));
-        fputcsv($fp, $header);
-        
-        // Write the data
+        $rows[] = $header;
+
         foreach ($grades as $grader_id => $questions) {
             $row = [
                 $grader_id_to_names[$grader_id] ?? 'Unknown',
@@ -339,15 +329,15 @@ class Crowdmark
             foreach ($question_labels as $label) {
                 $row[] = $questions[$label] ?? 0;
             }
-            fputcsv($fp, $row);
+            $rows[] = $row;
         }
-        
-        fclose($fp);
-        exit();        
+
+        return $this->downloadCsv($filename, $rows);
     }
 
 
-    public function generateStudentEmailList(array $assessment_ids){
+    public function generateStudentEmailList(array $assessment_ids)
+    {
         $email_list = [];
 
         foreach($assessment_ids as $assessment_id) {
@@ -355,15 +345,15 @@ class Crowdmark
             $temp->setMatchedEmailList();
             $email_list = array_merge($email_list, $temp->getMatchedEmailList());
         }   
-        // Download the EmailList as a txt file
         $datetime = date('Ymd-His');
-        header('Content-Type: text/plain');
-        header('Content-Disposition: attachment; filename="student_email_list_' . $datetime . '.txt"');
-        echo implode("\n", $email_list);
-        exit;
+        return $this->downloadText(
+            'student_email_list_' . $datetime . '.txt',
+            implode("\n", $email_list)
+        );
     }
 
-    public function generateStudentInformation(array $assessment_ids){
+    public function generateStudentInformation(array $assessment_ids)
+    {
         $student_list = [];
         $student_list[] = "Email, First Name, Last Name, Participant ID";
 
@@ -372,12 +362,12 @@ class Crowdmark
             $temp->setStdentCSVList();
             $student_list = array_merge($student_list, $temp->getStudentCSVList());
         }   
-        // Download the EmailList as a txt file
         $datetime = date('Ymd-His');
-        header('Content-Type: text/plain');
-        header('Content-Disposition: attachment; filename="student_list_' . $datetime . '.csv"');
-        echo implode("\n", $student_list);
-        exit;
+        return $this->downloadText(
+            'student_list_' . $datetime . '.csv',
+            implode("\n", $student_list),
+            'text/csv'
+        );
     }
 
     public function downloadPagesByPageNumber(array $assessment_ids, string $page_number)
@@ -402,32 +392,120 @@ class Crowdmark
         }
 
         $pdf = new Fpdi();
+        $tempFiles = [];
         foreach ($pageUrls as $url) {
-            // debug
-            // error_log(substr($url, 0, 10));
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 60); // Set timeout to 30 seconds
-            $image = curl_exec($ch);
+            $image = $this->fetchImageBytes($url);
+            if ($image === '') {
+                continue;
+            }
 
-            curl_close($ch);
             $imagePath = tempnam(sys_get_temp_dir(), 'img') . '.jpg';
             file_put_contents($imagePath, $image);
+            $tempFiles[] = $imagePath;
 
-            list($width, $height) = getimagesize($imagePath);
+            $imageSize = @getimagesize($imagePath);
+            if ($imageSize === false) {
+                continue;
+            }
+
+            [$width, $height] = $imageSize;
             $pdf->AddPage('P', [$width, $height]);
             $pdf->Image($imagePath, 0, 0, $width, $height);
-            unlink($imagePath);
+        }
+
+        foreach ($tempFiles as $tempFile) {
+            if (file_exists($tempFile)) {
+                unlink($tempFile);
+            }
         }
 
         $dateTime = date("Ymd_His");
         $fileName = "Page_".$page_number."_". $dateTime . ".pdf";
-        header('Content-Type: application/pdf');
-        header('Content-Disposition: attachment; filename="'. $fileName . '"');
-        $pdf->Output($fileName, 'D');
+        $pdfContent = $pdf->Output('S');
+
+        return $this->downloadBinary(
+            $fileName,
+            $pdfContent,
+            'application/pdf'
+        );
 
         // $pdf->Output('F', sys_get_temp_dir() . "/cover_pages_" . $dateTime . ".pdf");
         // echo '<a href="'. sys_get_temp_dir() . $dateTime . '.pdf" download>Download PDF</a>';
+    }
+
+    private function fetchImageBytes(string $url): string
+    {
+        if (class_exists(Http::class)) {
+            $response = Http::timeout(60)->get($url);
+
+            if ($response->successful()) {
+                return $response->body();
+            }
+
+            return '';
+        }
+
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+        $image = curl_exec($ch);
+        curl_close($ch);
+
+        return is_string($image) ? $image : '';
+    }
+
+    private function downloadCsv(string $fileName, array $rows)
+    {
+        if (function_exists('response')) {
+            return response()->streamDownload(function () use ($rows) {
+                $output = fopen('php://output', 'w');
+                foreach ($rows as $row) {
+                    fputcsv($output, $row);
+                }
+                fclose($output);
+            }, $fileName, [
+                'Content-Type' => 'text/csv',
+            ]);
+        }
+
+        header('Content-Type: text/csv');
+        header('Content-Disposition: attachment; filename="' . $fileName . '"');
+        $output = fopen('php://output', 'w');
+        foreach ($rows as $row) {
+            fputcsv($output, $row);
+        }
+        fclose($output);
+        exit;
+    }
+
+    private function downloadText(string $fileName, string $content, string $contentType = 'text/plain')
+    {
+        if (function_exists('response')) {
+            return response($content, 200, [
+                'Content-Type' => $contentType,
+                'Content-Disposition' => 'attachment; filename="' . $fileName . '"',
+            ]);
+        }
+
+        header('Content-Type: ' . $contentType);
+        header('Content-Disposition: attachment; filename="' . $fileName . '"');
+        echo $content;
+        exit;
+    }
+
+    private function downloadBinary(string $fileName, string $content, string $contentType)
+    {
+        if (function_exists('response')) {
+            return response($content, 200, [
+                'Content-Type' => $contentType,
+                'Content-Disposition' => 'attachment; filename="' . $fileName . '"',
+            ]);
+        }
+
+        header('Content-Type: ' . $contentType);
+        header('Content-Disposition: attachment; filename="' . $fileName . '"');
+        echo $content;
+        exit;
     }
     
 

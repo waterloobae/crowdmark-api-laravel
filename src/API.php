@@ -48,23 +48,6 @@ class API
             $this->api_key = $envApiKey;
             return;
         }
-
-        $apiKeyFile = __DIR__ . '/../config/API_KEY.php';
-        if (!file_exists($apiKeyFile)) {
-            throw new Exception(
-                'Crowdmark API key not configured. Set services.crowdmark.api_key, CROWDMARK_API_KEY, or create ' . $apiKeyFile
-            );
-        }
-
-        require $apiKeyFile;
-
-        if (!isset($api_key)) {
-            throw new Exception(
-                'API key is not set correctly in ' . $apiKeyFile . '. Set $api_key in that file.'
-            );
-        }
-
-        $this->api_key = $api_key;
     }
 
     public function exec(string $end_point)
