@@ -3,11 +3,13 @@
 namespace Waterloobae\CrowdmarkDashboard;
 
 use Exception;
+use Illuminate\Http\Client\Pool;
+use Illuminate\Support\Facades\Http;
 
 class API
 {
     protected string $url = 'https://app.crowdmark.com/';
-    protected string $api_key_string;
+    protected string $api_key;
 
     protected object $logger;
     // $this->exec uses and returns
@@ -20,137 +22,111 @@ class API
 
     protected int $httpCode;
 
-    public function __construct( object $logger )    
+    public function __construct(object $logger)
     {
-        // constructor
         $this->logger = $logger;
         $this->buildApiKeyString();
-
     }
 
     public function buildApiKeyString()
     {
+        if (function_exists('config')) {
+            $configuredBaseUrl = config('services.crowdmark.base_url');
+            if (is_string($configuredBaseUrl) && $configuredBaseUrl !== '') {
+                $this->url = rtrim($configuredBaseUrl, '/') . '/';
+            }
+
+            $configuredApiKey = config('services.crowdmark.api_key');
+            if (is_string($configuredApiKey) && $configuredApiKey !== '') {
+                $this->api_key = $configuredApiKey;
+                return;
+            }
+        }
+
+        $envApiKey = env('CROWDMARK_API_KEY');
+        if (is_string($envApiKey) && $envApiKey !== '') {
+            $this->api_key = $envApiKey;
+            return;
+        }
+
         $apiKeyFile = __DIR__ . '/../config/API_KEY.php';
         if (!file_exists($apiKeyFile)) {
-            die("error: API key file does not exist, " . $apiKeyFile .". Please create one by copying API_KEY_Example.php to API_KEY.php.");
+            throw new Exception(
+                'Crowdmark API key not configured. Set services.crowdmark.api_key, CROWDMARK_API_KEY, or create ' . $apiKeyFile
+            );
         }
-        
+
         require $apiKeyFile;
-        
+
         if (!isset($api_key)) {
-            die("error: API key is not set correctly in ". $apiKeyFile . ". Please set the API key, \$api_key, in the API_KEY.php file.");
+            throw new Exception(
+                'API key is not set correctly in ' . $apiKeyFile . '. Set $api_key in that file.'
+            );
         }
-        
-        $this->api_key_string = 'api_key=' . $api_key;
-        
+
+        $this->api_key = $api_key;
     }
 
-    public function exec(string $end_point){
-        //Status Message
-        $this->logger->setInfo("API call to " . $end_point . " started.");
-        //$this->logger->echoMessage("info", "API call to " . $end_point . " started.");
-        $curl = curl_init();
-        // Does end_point have a ? in it?
-        if (strpos($end_point, '?') !== false) {
-           curl_setopt($curl, CURLOPT_URL, $this->url . $end_point . '&' . $this->api_key_string);
-        } else {
-           curl_setopt($curl, CURLOPT_URL, $this->url . $end_point . '?' . $this->api_key_string);
+    public function exec(string $end_point)
+    {
+        $this->logger->setInfo('API call to ' . $end_point . ' started.');
+
+        $response = Http::baseUrl($this->url)
+            ->timeout(60)
+            ->retry($this->max_retries, 1000, throw: false)
+            ->acceptJson()
+            ->get($end_point, ['api_key' => $this->api_key]);
+
+        $this->httpCode = $response->status();
+        $decoded = $response->json();
+
+        if (
+            $response->successful()
+            && is_array($decoded)
+            && !array_key_exists('errors', $decoded)
+        ) {
+            $this->api_response = json_decode($response->body());
+            return;
         }
 
-       curl_setopt($curl, CURLOPT_TIMEOUT, 6000);
-       curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
-       
-       set_time_limit(3000);
-
-       do {
-           $response = curl_exec($curl);
-           if (json_decode($response) === null) {
-               $this->current_try++;
-                $this->consoleLog("Attempt $this->current_try failed. Retrying...");
-
-               sleep(1); // Optional: wait 1 seconds before retrying
-           }
-       } while ( (json_decode($response) === null ||
-                    array_key_exists('errors',json_decode($response, true)))
-                    && $this->current_try < $this->max_retries);
-       curl_close($curl);
-       $this->current_try = 0;
-
-       $this->httpCode = curl_getinfo($curl, CURLINFO_HTTP_CODE);
-
-        if( json_decode($response) !== null && 
-            !array_key_exists('errors',json_decode($response, true)) &&
-            $this->httpCode == 200){
-                $this->api_response = json_decode($response);
-        }else{
-            throw new Exception("API call returned non JSON response or Errors were returned from Crowdmark.");
-        }
+        throw new Exception(
+            'Crowdmark API call failed for endpoint [' . $end_point . '] with HTTP ' . $this->httpCode . '.'
+        );
 
     }
 
-    public function multiExec(array $big_end_points){
-        ini_set('memory_limit', '4096M');
+    public function multiExec(array $big_end_points)
+    {
         $batch_size = 10;
-        $interval = 0;
+        $this->api_responses = [];
 
         $batches = array_chunk($big_end_points, $batch_size);
-        // Give the server a break
-        sleep($interval);
+
         foreach ($batches as $i => $end_points) {
-            // Initialize the multi cURL handler
-            $mh = curl_multi_init();
-            // Array to hold individual cURL handles
-            $curlHandles = [];
+            $responses = Http::baseUrl($this->url)
+                ->acceptJson()
+                ->pool(function (Pool $pool) use ($end_points) {
+                    return array_map(function (string $end_point) use ($pool) {
+                        $this->logger->setInfo('API call to ' . $end_point . ' started.');
 
-            // Loop through each URL and create a cURL handle for it
-            foreach ($end_points as $end_point) {
-                //Status Message
-                $this->logger->setInfo("API call to " . $end_point . " started.");                
-                //$this->logger->echoMessage("info", "API call to " . $end_point . " started.");
-                $ch = curl_init();
-                if (strpos($end_point, '?') !== false) {
-                    curl_setopt($ch, CURLOPT_URL, $this->url . $end_point . '&' . $this->api_key_string);
-                } else {
-                    curl_setopt($ch, CURLOPT_URL, $this->url . $end_point . '?' . $this->api_key_string);
+                        return $pool
+                            ->timeout(60)
+                            ->retry($this->max_retries, 1000, throw: false)
+                            ->get($end_point, ['api_key' => $this->api_key]);
+                    }, $end_points);
+                });
+
+            foreach ($responses as $j => $response) {
+                $decoded = $response->json();
+
+                if (
+                    $response->successful()
+                    && is_array($decoded)
+                    && !array_key_exists('errors', $decoded)
+                ) {
+                    $this->api_responses[$i * $batch_size + $j] = json_decode($response->body());
                 }
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-
-                // Add the handle to the multi cURL handler
-                curl_multi_add_handle($mh, $ch);
-
-                // Save the handle for later reference
-                $curlHandles[] = $ch;
             }
-
-            // Execute the multi cURL handles
-            $running = null;
-            do {
-                curl_multi_exec($mh, $running);
-                curl_multi_select($mh);
-            } while ($running > 0);
-
-            // Collect the results
-            foreach ($curlHandles as $j => $ch) {
-                // Get the response content
-                $response = curl_multi_getcontent($ch);
-                if(json_decode($response) !== null){
-                    // $data = json_decode($response)->data;
-                    $data = json_decode($response);                    
-                    $this->api_responses[ $i * $batch_size + $j] = $data;
-                    // echo"Response: " . $i * $batch_size + $j . "<br>";
-                }
-                // Remove the handle from the multi cURL handler
-                curl_multi_remove_handle($mh, $ch);
-
-                // Close the individual cURL handle
-                curl_close($ch);
-            }
-
-            // Close the multi cURL handler
-            curl_multi_close($mh);
-
-            // Wait for the interval before starting the next batch
-            sleep($interval);
         }
     }
     
@@ -167,10 +143,19 @@ class API
     {
         return $this->httpCode;
     }
-    public function consoleLog($msg){
+
+    public function consoleLog($msg)
+    {
         $output = $msg;
-        if (is_array($output))
+        if (is_array($output)) {
             $output = implode(',', $output);
+        }
+
+        if (function_exists('logger')) {
+            logger()->warning('Crowdmark API: ' . $output);
+            return;
+        }
+
         echo "<script>console.log('Error message(s): " . $output . "' );</script>";
     }
 
