@@ -19,45 +19,93 @@ class Crowdmark
     protected array $assessment_ids = [];
 
     protected object $api_response;
-    protected static $thisPath = "";
 
     public function __construct()
     {
         // constructor
         $this->logger = new Logger();
-        $this->setThisPath();
         $api = new API( $this->logger );
         $api->exec('api/courses');
         $this->api_response = $api->getResponse();
         $course_data = array();
         foreach ($this->api_response->data as $course_data) {
-            $this->courses[] = new Course($course_data->id, $this->logger);
+            $this->courses[] = new Course($course_data, $this->logger);
             $this->course_ids[] = $course_data->id;
         }
-        $this->setAssessmentIDs();
-    }
-
-    public function setThisPath(){
-        $this_site_root = $_SERVER['DOCUMENT_ROOT'];
-        
-        if (strpos(__DIR__, $this_site_root) !== false) {
-            $absolutePath = str_replace($this_site_root, '', __DIR__);
-        } else {
-            $dir = __DIR__;
-            $parts = explode(DIRECTORY_SEPARATOR, trim($dir, DIRECTORY_SEPARATOR));
-            array_shift($parts); // Remove the first (top-most) directory
-            $absolutePath = DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, $parts);
-        }
-        self::$thisPath = $absolutePath;
-        return;
     }
 
     public function setAssessmentIDs()
     {
-        foreach ($this->courses as $course) {
-            $this->assessment_ids = array_merge($this->assessment_ids, $course->getAssessmentIds());
+        if ($this->assessment_ids !== []) {
+            return;
         }
+
+        $this->assessment_ids = [];
+
+        if ($this->course_ids === []) {
+            return;
+        }
+
+        $api = new API($this->logger);
+
+        try {
+            $api->exec('api/assessments');
+        } catch (\Throwable $e) {
+            $this->logger->setWarning('Assessment ID fetch failed on first page.');
+            return;
+        }
+
+        $firstResponse = $api->getResponse();
+
+        $this->appendAssessmentIdsFromResponse($firstResponse);
+
+        $total = (int) ($firstResponse->meta->{'total'} ?? 0);
+        $pageSize = (int) ($firstResponse->meta->{'page-size'} ?? 100);
+        if ($pageSize <= 0) {
+            $pageSize = 100;
+        }
+
+        $totalPages = max(1, (int) ceil($total / $pageSize));
+        if ($totalPages > 1) {
+            $endPoints = [];
+            for ($page = 2; $page <= $totalPages; $page++) {
+                $endPoints[] = 'api/assessments?page[number]=' . $page;
+            }
+
+            $api->multiExec($endPoints);
+            $responses = $api->getResponses();
+
+            foreach ($responses as $response) {
+                if (is_object($response)) {
+                    $this->appendAssessmentIdsFromResponse($response);
+                }
+            }
+
+            foreach ($endPoints as $index => $endPoint) {
+                if (array_key_exists($index, $responses)) {
+                    continue;
+                }
+
+                try {
+                    $api->exec($endPoint);
+                    $this->appendAssessmentIdsFromResponse($api->getResponse());
+                } catch (\Throwable $e) {
+                    $this->logger->setWarning('Assessment ID fetch failed on fallback page ' . ($index + 2) . '.');
+                }
+            }
+        }
+
+        $this->assessment_ids = array_values(array_unique($this->assessment_ids));
     }   
+
+    private function appendAssessmentIdsFromResponse(object $response): void
+    {
+        foreach ($response->data ?? [] as $assessment) {
+            if (isset($assessment->id)) {
+                $this->assessment_ids[] = (string) $assessment->id;
+            }
+        }
+    }
 
     public function returnAssessmentIDs(array $course_names)
     {
@@ -68,68 +116,6 @@ class Crowdmark
             }
         }
         return $assessment_ids;
-    }
-
-    public function createDownloadLinks(string $type, array $course_names, ?string $page_number = null): string
-    {
-        $valid_encoded_course_names = [];
-        $webRootPath = self::$thisPath;
-
-        $output = [];
-        switch($type) {
-            case "page":
-                $output[] = "<h2>3. Download Booklet Pages</h2>";
-                break;
-            case "studentinfo":
-                $output[] = "<h2>3. Download Student Information</h2>";
-                break;
-            case "studentemaillist":
-                $output[] = "<h2>3. Download Student Email List</h2>";
-                break;
-            case "grader":
-                $output[] = "<h2>3. Download Grader's Grading List</h2>";
-                break;
-            case "grading":
-                $output[] = "<h2>3. Download Grading Status</h2>";
-                break;
-            case "uploadedmatched":
-                $output[] = "<h2>3. Download Uploaded and Matched Counts</h2>";
-                break;
-            case "integritycheck":
-                $output[] = "<h2>3. Download Integrity Check Report</h2>";
-                break;
-        }
-        
-        foreach($course_names as $course_name) {
-            $is_valid = false;
-            
-            foreach($this->courses as $course) {
-                if($course->getCourseName() == $course_name) {
-                    $is_valid = true;
-                    break;
-                }
-            }
-            $encoded_course_name = urlencode($course_name);
-            
-            $download_link = $webRootPath."/Download.php?type=" . $type . "&course_name=" . $encoded_course_name. "&page_number=" . $page_number;
-            if($is_valid) {
-                $valid_encoded_course_names[] = $encoded_course_name;    
-                $output[] = '<a href="' . $download_link . '" download onclick="this.innerText=\'Loading '.$course_name.'. Please wait!\'; this.style.pointerEvents = \'none\';">Download (' . $course_name . ')</a><br>';
-            } else {
-                $output[] = "Invalid course name: " . $course_name . "<br>";
-            }
-
-        }
-
-        $output[] = "<br>";
-        if(empty($valid_encoded_course_names)) {
-            $output[] = "No valid course names found.<br>";
-        }else{
-            $download_link = $webRootPath."/Download.php?type=" . $type . "&course_name=" . implode("~", $valid_encoded_course_names). "&page_number=" . $page_number;
-            $output[] = '<a href="' . $download_link . '" download onclick="this.innerText=\'Loading All Courses. Please wait!\'; this.style.pointerEvents = \'none\';">Download All Course</a><br><br>';
-        }
-
-        return implode('', $output);
     }
 
     //=================================
@@ -370,6 +356,109 @@ class Crowdmark
         );
     }
 
+    /**
+     * Generate one PDF per odd page number (1, 3, 5, … $maxPage) across all given
+     * assessments, then bundle them into a ZIP archive.
+     *
+     * Returns the path to a temporary ZIP file (caller must delete it).
+     *
+     * @param  string[] $assessment_ids
+     * @param  int      $maxPage  Highest page number to consider (inclusive). Default 39.
+     */
+    public function generateOddPagesPdfZip(array $assessment_ids, int $maxPage = 39): string
+    {
+        // ── 1. Load all booklets and their pages (once) ──────────────────────
+        $assessments = [];
+        foreach ($assessment_ids as $assessment_id) {
+            $temp = new Assessment($assessment_id, $this->logger);
+            $temp->setAssessmentPages($temp->getBooklets());
+            $assessments[] = $temp;
+        }
+
+        // ── 2. Index page URLs by page number ─────────────────────────────────
+        // [ page_number => [ url, url, … ] ]
+        $urlsByPage = [];
+        foreach ($assessments as $assessment) {
+            foreach ($assessment->getBooklets() as $booklet) {
+                foreach ($booklet->getPages() as $page) {
+                    $n = (int) $page->getPageNumber();
+                    $urlsByPage[$n][] = $page->getPageUrl();
+                }
+            }
+        }
+
+        // ── 3. Build one PDF per odd page number ─────────────────────────────
+        $zipPath = tempnam(sys_get_temp_dir(), 'cm_odd_') . '.zip';
+        $zip = new \ZipArchive();
+        if ($zip->open($zipPath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
+            throw new \RuntimeException('Could not create ZIP archive at ' . $zipPath);
+        }
+
+        $pagesAdded = 0;
+        $pdfTmpFiles = [];
+        for ($pageNum = 1; $pageNum <= $maxPage; $pageNum += 2) {
+            $urls = $urlsByPage[$pageNum] ?? [];
+            if (empty($urls)) {
+                $this->logger->setWarning("No URLs found for page {$pageNum} — skipping.");
+                continue;
+            }
+
+            $pdf      = new Fpdi();
+            $tmpFiles = [];
+
+            foreach ($urls as $url) {
+                $imageBytes = $this->fetchImageBytes($url);
+                if ($imageBytes === '') {
+                    continue;
+                }
+
+                $imgPath = tempnam(sys_get_temp_dir(), 'cm_img_') . '.jpg';
+                file_put_contents($imgPath, $imageBytes);
+                $tmpFiles[] = $imgPath;
+
+                $size = @getimagesize($imgPath);
+                if ($size === false) {
+                    continue;
+                }
+
+                [$w, $h] = $size;
+                $pdf->AddPage('P', [$w, $h]);
+                $pdf->Image($imgPath, 0, 0, $w, $h);
+                $pagesAdded++;
+            }
+
+            foreach ($tmpFiles as $f) {
+                if (file_exists($f)) {
+                    unlink($f);
+                }
+            }
+
+            // Write PDF to temp file instead of holding in memory
+            $tmpPdfPath = tempnam(sys_get_temp_dir(), 'cm_pdf_') . '.pdf';
+            $pdf->Output('F', $tmpPdfPath);
+            
+            // Add file to ZIP (file is read when zip->close() is called)
+            $zip->addFile($tmpPdfPath, "Page_{$pageNum}.pdf");
+            $pdfTmpFiles[] = $tmpPdfPath; // Store for deletion after zip closes
+        }
+
+        $zip->close();
+
+        // Clean up temp PDF files now that ZIP is closed
+        foreach ($pdfTmpFiles as $f) {
+            if (file_exists($f)) {
+                unlink($f);
+            }
+        }
+
+        if ($pagesAdded === 0) {
+            unlink($zipPath);
+            throw new \RuntimeException('No page images could be downloaded — the ZIP would be empty.');
+        }
+
+        return $zipPath;
+    }
+
     public function downloadPagesByPageNumber(array $assessment_ids, string $page_number)
     {
         $assessments = [];
@@ -389,6 +478,14 @@ class Crowdmark
                     }
                 }
             }
+        }
+
+        if (empty($pageUrls)) {
+            throw new \RuntimeException(
+                'No page URLs found for page number ' . $page_number . ' across ' .
+                array_sum(array_map(fn($a) => count($a->getBooklets()), $assessments)) .
+                ' booklets. The page number may not exist, or page data could not be loaded.'
+            );
         }
 
         $pdf = new Fpdi();
@@ -435,23 +532,16 @@ class Crowdmark
 
     private function fetchImageBytes(string $url): string
     {
-        if (class_exists(Http::class)) {
-            $response = Http::timeout(60)->get($url);
-
-            if ($response->successful()) {
-                return $response->body();
-            }
-
+        if (!class_exists(Http::class)) {
             return '';
         }
 
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-        $image = curl_exec($ch);
-        curl_close($ch);
-
-        return is_string($image) ? $image : '';
+        try {
+            $response = Http::timeout(60)->get($url);
+            return $response->successful() ? $response->body() : '';
+        } catch (\Throwable $e) {
+            return '';
+        }
     }
 
     private function downloadCsv(string $fileName, array $rows)
@@ -521,6 +611,15 @@ class Crowdmark
     public function getCourseIds()
     {
         return $this->course_ids;
+    }
+
+    public function getAssessmentIds()
+    {
+        if ($this->assessment_ids === []) {
+            $this->setAssessmentIDs();
+        }
+
+        return $this->assessment_ids;
     }
 
     public function getAPIResponse()

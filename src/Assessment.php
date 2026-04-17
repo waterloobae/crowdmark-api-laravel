@@ -79,15 +79,10 @@ class Assessment{
     public function setBooklets($assessment_id)
     {
         $self_link = 'api/assessments/' . $assessment_id . '/booklets';
-
         do {
             $api = new API( $this->logger );
             $api->exec($self_link);
             $response = $api->getResponse();
-            // echo "==== Booklet Debug ====<br>";
-            // echo("<pre>");
-            // var_dump($response->data);
-            // echo("</pre>");
 
             foreach ($response->data as $booklet) {
                 $this->booklets[] = new Booklet($this->assessment_id, $booklet, $this->logger);
@@ -146,6 +141,7 @@ class Assessment{
 
     public function setAssessmentPages($booklets)
     {
+        $end_points = [];
         foreach($booklets as $booklet){
             $end_points[] = 'api/booklets/' . $booklet->getBookletId() . '/pages';
         }
@@ -154,13 +150,16 @@ class Assessment{
         $api->multiExec($end_points);
         $api_responses = $api->getResponses();
 
+        // Build a lookup of which booklet IDs were matched via multiExec
+        $matched_booklet_ids = [];
+
         foreach($api_responses as $api_response){
             $temp_pages = [];
             $booklet_id = preg_replace('/\D/', '', $api_response->links->self);
+            $matched_booklet_ids[] = $booklet_id;
 
             foreach ($api_response->data as $data) {
                 if($data->type == "page"){
-                //if($data->type == "page" && $data->attributes->number == 1){
                     $temp_pages[] = new Page($this->assessment_id, $booklet_id, $data, $this->logger);
                 }
             }
@@ -171,6 +170,30 @@ class Assessment{
                         $booklet->setPages($temp_pages);
                     }
                     break;
+                }
+            }
+        }
+
+        // If multiExec returned nothing (e.g. pool ConnectionException), fall back to
+        // sequential exec() so pages are always fetched.
+        if (empty($api_responses)) {
+            $this->logger->setWarning('multiExec returned 0 page responses — falling back to sequential exec.');
+            foreach ($booklets as $booklet) {
+                try {
+                    $seq_api = new API($this->logger);
+                    $seq_api->exec('api/booklets/' . $booklet->getBookletId() . '/pages');
+                    $seq_response = $seq_api->getResponse();
+                    $temp_pages = [];
+                    foreach ($seq_response->data as $data) {
+                        if ($data->type === 'page') {
+                            $temp_pages[] = new Page($this->assessment_id, $booklet->getBookletId(), $data, $this->logger);
+                        }
+                    }
+                    if (!empty($temp_pages)) {
+                        $booklet->setPages($temp_pages);
+                    }
+                } catch (\Throwable $e) {
+                    $this->logger->setWarning('Failed to fetch pages for booklet ' . $booklet->getBookletId() . ': ' . $e->getMessage());
                 }
             }
         }
