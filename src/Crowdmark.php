@@ -118,6 +118,144 @@ class Crowdmark
         return $assessment_ids;
     }
 
+    public function getBookletPageCacheKey(array $assessment_ids): string
+    {
+        $normalized = $this->normalizeAssessmentIds($assessment_ids);
+        return sha1(implode('|', $normalized));
+    }
+
+    public function saveBookletPageIndexJson(array $assessment_ids, bool $forceRefresh = false): array
+    {
+        $index = $this->getOrBuildBookletPageIndex($assessment_ids, $forceRefresh);
+        $cacheKey = (string) ($index['cache_key'] ?? $this->getBookletPageCacheKey($assessment_ids));
+        $cachePath = $this->getBookletPageCacheFilePath($cacheKey);
+
+        $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            throw new \RuntimeException('Failed to encode booklet/page JSON cache.');
+        }
+
+        if (file_put_contents($cachePath, $json) === false) {
+            throw new \RuntimeException('Failed to write booklet/page JSON cache to disk.');
+        }
+
+        return [
+            'cache_key' => $cacheKey,
+            'path' => $cachePath,
+            'count' => count($index['booklet_pages'] ?? []),
+            'created_at' => $index['created_at'] ?? date('c'),
+        ];
+    }
+
+    public function loadBookletPageIndexJsonByAssessmentIds(array $assessment_ids): ?array
+    {
+        $cacheKey = $this->getBookletPageCacheKey($assessment_ids);
+        $cachePath = $this->getBookletPageCacheFilePath($cacheKey);
+        if (!is_file($cachePath)) {
+            return null;
+        }
+
+        $raw = file_get_contents($cachePath);
+        if ($raw === false || trim($raw) === '') {
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        return $decoded;
+    }
+
+    private function getOrBuildBookletPageIndex(array $assessment_ids, bool $forceRefresh = false): array
+    {
+        $cacheKey = $this->getBookletPageCacheKey($assessment_ids);
+
+        if (!$forceRefresh) {
+            $cached = $this->loadBookletPageIndexJsonByAssessmentIds($assessment_ids);
+            if (is_array($cached) && isset($cached['booklet_pages']) && is_array($cached['booklet_pages'])) {
+                return $cached;
+            }
+        }
+
+        $index = $this->buildBookletPageIndex($assessment_ids);
+        $index['cache_key'] = $cacheKey;
+
+        $cachePath = $this->getBookletPageCacheFilePath($cacheKey);
+        $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($json !== false) {
+            file_put_contents($cachePath, $json);
+        }
+
+        return $index;
+    }
+
+    private function buildBookletPageIndex(array $assessment_ids): array
+    {
+        $normalizedAssessmentIds = $this->normalizeAssessmentIds($assessment_ids);
+
+        $bookletPages = [];
+        foreach ($normalizedAssessmentIds as $assessment_id) {
+            $assessment = new Assessment($assessment_id, $this->logger);
+            $assessment->setAssessmentPages($assessment->getBooklets());
+
+            foreach ($assessment->getBooklets() as $booklet) {
+                foreach ($booklet->getPages() as $page) {
+                    $selfLink = trim((string) $page->getSelfLink());
+                    if ($selfLink === '') {
+                        $selfLink = 'api/pages/' . $page->getPageId();
+                    }
+
+                    $bookletPages[] = [
+                        'assessment_id' => (string) $assessment->getAssessmentID(),
+                        'booklet_id' => (string) $booklet->getBookletId(),
+                        'booklet_number' => (string) $booklet->getBookletNumber(),
+                        'page_number' => (string) $page->getPageNumber(),
+                        'self_link' => $selfLink,
+                        'page_url' => (string) $page->getPageUrl(),
+                    ];
+                }
+            }
+        }
+
+        return [
+            'version' => 1,
+            'created_at' => date('c'),
+            'assessment_ids' => $normalizedAssessmentIds,
+            'booklet_pages' => $bookletPages,
+        ];
+    }
+
+    private function normalizeAssessmentIds(array $assessment_ids): array
+    {
+        $normalized = array_values(array_filter(array_map(static function ($id) {
+            return trim((string) $id);
+        }, $assessment_ids)));
+
+        sort($normalized);
+
+        return array_values(array_unique($normalized));
+    }
+
+    private function getBookletPageCacheDirectory(): string
+    {
+        $base = function_exists('storage_path')
+            ? storage_path('app/crowdmark-cache')
+            : rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'crowdmark-cache';
+
+        if (!is_dir($base)) {
+            @mkdir($base, 0755, true);
+        }
+
+        return $base;
+    }
+
+    private function getBookletPageCacheFilePath(string $cacheKey): string
+    {
+        return $this->getBookletPageCacheDirectory() . DIRECTORY_SEPARATOR . $cacheKey . '.json';
+    }
+
     //=================================
     //
     // Functions with Business Logic
@@ -367,27 +505,60 @@ class Crowdmark
      */
     public function generateOddPagesPdfZip(array $assessment_ids, int $maxPage = 39): string
     {
-        // ── 1. Load all booklets and their pages (once) ──────────────────────
-        $assessments = [];
-        foreach ($assessment_ids as $assessment_id) {
-            $temp = new Assessment($assessment_id, $this->logger);
-            $temp->setAssessmentPages($temp->getBooklets());
-            $assessments[] = $temp;
-        }
+        $index = $this->getOrBuildBookletPageIndex($assessment_ids);
 
-        // ── 2. Index page URLs by page number ─────────────────────────────────
-        // [ page_number => [ url, url, … ] ]
-        $urlsByPage = [];
-        foreach ($assessments as $assessment) {
-            foreach ($assessment->getBooklets() as $booklet) {
-                foreach ($booklet->getPages() as $page) {
-                    $n = (int) $page->getPageNumber();
-                    $urlsByPage[$n][] = $page->getPageUrl();
-                }
+        // Build booklet-based odd-page index.
+        $booklets = [];
+        foreach (($index['booklet_pages'] ?? []) as $entry) {
+            $pageNumber = (int) ($entry['page_number'] ?? 0);
+            $pageUrl = trim((string) ($entry['page_url'] ?? ''));
+
+            if ($pageNumber <= 0 || $pageNumber > $maxPage || ($pageNumber % 2) === 0 || $pageUrl === '') {
+                continue;
             }
+
+            $bookletId = (string) ($entry['booklet_id'] ?? 'unknown');
+            $bookletNumber = (string) ($entry['booklet_number'] ?? '');
+
+            if (!isset($booklets[$bookletId])) {
+                $booklets[$bookletId] = [
+                    'booklet_id' => $bookletId,
+                    'booklet_number' => $bookletNumber,
+                    'pages' => [],
+                ];
+            }
+
+            $booklets[$bookletId]['pages'][] = [
+                'page_number' => $pageNumber,
+                'page_url' => $pageUrl,
+            ];
         }
 
-        // ── 3. Build one PDF per odd page number ─────────────────────────────
+        if (empty($booklets)) {
+            throw new \RuntimeException('No odd page URLs were found in cached booklet data.');
+        }
+
+        $booklets = array_values($booklets);
+        usort($booklets, static function (array $a, array $b): int {
+            $aNum = trim((string) ($a['booklet_number'] ?? ''));
+            $bNum = trim((string) ($b['booklet_number'] ?? ''));
+
+            if (is_numeric($aNum) && is_numeric($bNum)) {
+                return (int) $aNum <=> (int) $bNum;
+            }
+
+            return strnatcmp($aNum, $bNum);
+        });
+
+        foreach ($booklets as &$booklet) {
+            usort($booklet['pages'], static function (array $a, array $b): int {
+                return ((int) $a['page_number']) <=> ((int) $b['page_number']);
+            });
+        }
+        unset($booklet);
+
+        // Build PDFs booklet-by-booklet, splitting every 1,000 pages.
+        $maxPagesPerPdf = 1000;
         $zipPath = tempnam(sys_get_temp_dir(), 'cm_odd_') . '.zip';
         $zip = new \ZipArchive();
         if ($zip->open($zipPath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
@@ -395,18 +566,31 @@ class Crowdmark
         }
 
         $pagesAdded = 0;
+        $partNumber = 1;
+        $currentPdfPageCount = 0;
+        $pdf = new Fpdi();
         $pdfTmpFiles = [];
-        for ($pageNum = 1; $pageNum <= $maxPage; $pageNum += 2) {
-            $urls = $urlsByPage[$pageNum] ?? [];
-            if (empty($urls)) {
-                $this->logger->setWarning("No URLs found for page {$pageNum} — skipping.");
-                continue;
+
+        $flushCurrentPdf = function () use (&$pdf, &$currentPdfPageCount, &$partNumber, &$pdfTmpFiles, $zip): void {
+            if ($currentPdfPageCount === 0) {
+                return;
             }
 
-            $pdf      = new Fpdi();
-            $tmpFiles = [];
+            $tmpPdfPath = tempnam(sys_get_temp_dir(), 'cm_pdf_') . '.pdf';
+            $pdf->Output('F', $tmpPdfPath);
 
-            foreach ($urls as $url) {
+            $zip->addFile($tmpPdfPath, sprintf('Odd_Booklet_Part_%03d.pdf', $partNumber));
+            $pdfTmpFiles[] = $tmpPdfPath;
+
+            $partNumber++;
+            $currentPdfPageCount = 0;
+            $pdf = new Fpdi();
+        };
+
+        foreach ($booklets as $booklet) {
+            foreach ($booklet['pages'] as $page) {
+                $url = (string) $page['page_url'];
+
                 $imageBytes = $this->fetchImageBytes($url);
                 if ($imageBytes === '') {
                     continue;
@@ -414,33 +598,31 @@ class Crowdmark
 
                 $imgPath = tempnam(sys_get_temp_dir(), 'cm_img_') . '.jpg';
                 file_put_contents($imgPath, $imageBytes);
-                $tmpFiles[] = $imgPath;
 
-                $size = @getimagesize($imgPath);
-                if ($size === false) {
-                    continue;
+                try {
+                    $size = @getimagesize($imgPath);
+                    if ($size === false) {
+                        continue;
+                    }
+
+                    [$w, $h] = $size;
+                    $pdf->AddPage('P', [$w, $h]);
+                    $pdf->Image($imgPath, 0, 0, $w, $h);
+                    $pagesAdded++;
+                    $currentPdfPageCount++;
+
+                    if ($currentPdfPageCount >= $maxPagesPerPdf) {
+                        $flushCurrentPdf();
+                    }
+                } finally {
+                    if (file_exists($imgPath)) {
+                        unlink($imgPath);
+                    }
                 }
-
-                [$w, $h] = $size;
-                $pdf->AddPage('P', [$w, $h]);
-                $pdf->Image($imgPath, 0, 0, $w, $h);
-                $pagesAdded++;
             }
-
-            foreach ($tmpFiles as $f) {
-                if (file_exists($f)) {
-                    unlink($f);
-                }
-            }
-
-            // Write PDF to temp file instead of holding in memory
-            $tmpPdfPath = tempnam(sys_get_temp_dir(), 'cm_pdf_') . '.pdf';
-            $pdf->Output('F', $tmpPdfPath);
-            
-            // Add file to ZIP (file is read when zip->close() is called)
-            $zip->addFile($tmpPdfPath, "Page_{$pageNum}.pdf");
-            $pdfTmpFiles[] = $tmpPdfPath; // Store for deletion after zip closes
         }
+
+        $flushCurrentPdf();
 
         $zip->close();
 
@@ -461,21 +643,13 @@ class Crowdmark
 
     public function downloadPagesByPageNumber(array $assessment_ids, string $page_number)
     {
-        $assessments = [];
-        foreach($assessment_ids as $assessment_id) {
-            $temp = new Assessment($assessment_id, $this->logger);
-            $temp->setAssessmentPages($temp->getBooklets());
-            $assessments[] = $temp;
-
-        }   
-
+        $index = $this->getOrBuildBookletPageIndex($assessment_ids);
         $pageUrls = [];
-        foreach($assessments as $assessment) {
-            foreach($assessment->getBooklets() as $booklet) {
-                foreach($booklet->getPages() as $page) {
-                    if($page->getPageNumber() == $page_number){
-                        $pageUrls[] = $page->getPageUrl();
-                    }
+        foreach (($index['booklet_pages'] ?? []) as $entry) {
+            if ((string) ($entry['page_number'] ?? '') === (string) $page_number) {
+                $url = (string) ($entry['page_url'] ?? '');
+                if ($url !== '') {
+                    $pageUrls[] = $url;
                 }
             }
         }
@@ -483,8 +657,8 @@ class Crowdmark
         if (empty($pageUrls)) {
             throw new \RuntimeException(
                 'No page URLs found for page number ' . $page_number . ' across ' .
-                array_sum(array_map(fn($a) => count($a->getBooklets()), $assessments)) .
-                ' booklets. The page number may not exist, or page data could not be loaded.'
+                count($index['booklet_pages'] ?? []) .
+                ' cached page rows. The page number may not exist, or cached page data could not be loaded.'
             );
         }
 

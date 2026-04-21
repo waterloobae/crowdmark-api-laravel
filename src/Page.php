@@ -10,6 +10,7 @@ class Page{
     protected string $page_id;
     protected string $page_url;
     protected string $page_number;
+    protected string $self_link;
  
     public function __construct(string $assessment_id,string $booklet_id, object $page, object $logger)
     {
@@ -22,6 +23,7 @@ class Page{
         $this->page_id = $page->id;
         $this->page_url = $page->attributes->url;
         $this->page_number = $page->attributes->number;
+        $this->self_link = $page->links->self ?? '';
     }
 
     public function getResponseIds()
@@ -42,6 +44,11 @@ class Page{
     public function getPageNumber()
     {
         return $this->page_number;
+    }
+
+    public function getSelfLink()
+    {
+        return $this->self_link;
     }
 
     public function getAssessmentId()

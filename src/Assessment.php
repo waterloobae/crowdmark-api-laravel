@@ -155,7 +155,15 @@ class Assessment{
 
         foreach($api_responses as $api_response){
             $temp_pages = [];
-            $booklet_id = preg_replace('/\D/', '', $api_response->links->self);
+            $booklet_id = '';
+            $selfLink = (string) ($api_response->links->self ?? '');
+            if ($selfLink !== '' && preg_match('#/booklets/([^/]+)/pages#', $selfLink, $matches) === 1) {
+                $booklet_id = (string) $matches[1];
+            }
+
+            if ($booklet_id === '') {
+                continue;
+            }
             $matched_booklet_ids[] = $booklet_id;
 
             foreach ($api_response->data as $data) {
