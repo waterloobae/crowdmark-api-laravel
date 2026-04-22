@@ -50,9 +50,9 @@ php artisan queue:work --timeout=0 --tries=1
 
 `routes/web.php` is not part of this package. Add routes like the following in your app.
 
-```php
-<?php
+Shared imports:
 
+```php
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Route;
@@ -60,11 +60,19 @@ use Illuminate\Support\Facades\Storage;
 use Waterloobae\CrowdmarkApiLaravel\Jobs\GenerateCrowdmarkBookletPagesJsonJob;
 use Waterloobae\CrowdmarkApiLaravel\Jobs\GenerateCrowdmarkPagesPdfJob;
 use Waterloobae\CrowdmarkApiLaravel\Jobs\GenerateCrowdmarkOddPagesPdfJob;
+```
 
+Route 1. Crowdmark page entry point.
+
+```php
 Route::get('/crowdmark', function () {
     return view('crowdmark');
 })->name('crowdmark');
+```
 
+Route 2. Queue booklet/page JSON cache build and return a polling token.
+
+```php
 Route::post('/crowdmark/save-booklet-pages-json', function (Request $request) {
     $assessmentIds = array_values(array_filter(
         array_map('trim', explode(',', $request->input('assessment_ids', '')))
@@ -84,7 +92,79 @@ Route::post('/crowdmark/save-booklet-pages-json', function (Request $request) {
 
     return response()->json(['token' => $token]);
 })->name('crowdmark.save-booklet-pages-json');
+```
 
+Route 3. Check JSON cache job status and return download URL when done.
+
+```php
+Route::get('/crowdmark/json-status/{token}', function (string $token) {
+    $raw = Cache::get("crowdmark_json_{$token}");
+
+    if ($raw === null) {
+        return response()->json(['status' => 'not_found'], 404);
+    }
+
+    if (($raw['status'] ?? '') === 'done') {
+        $cacheKey = (string) ($raw['cache_key'] ?? '');
+        $savedPath = (string) ($raw['path'] ?? '');
+
+        return response()->json([
+            'status' => 'done',
+            'cache_key' => $cacheKey,
+            'count' => (int) ($raw['count'] ?? 0),
+            'created_at' => (string) ($raw['created_at'] ?? ''),
+            'download_url' => $savedPath !== ''
+                ? route('crowdmark.download-booklet-pages-json-by-token', ['token' => $token])
+                : route('crowdmark.download-booklet-pages-json', ['cacheKey' => $cacheKey]),
+        ]);
+    }
+
+    if (($raw['status'] ?? '') === 'failed') {
+        return response()->json([
+            'status' => 'failed',
+            'error' => (string) ($raw['error'] ?? 'Unknown job failure.'),
+        ]);
+    }
+
+    return response()->json(['status' => 'pending']);
+})->name('crowdmark.json-status');
+```
+
+Route 4. Download JSON cache by hash key (default path).
+
+```php
+Route::get('/crowdmark/booklet-pages-json/{cacheKey}', function (string $cacheKey) {
+    $path = storage_path('app/crowdmark-cache/' . $cacheKey . '.json');
+    if (!is_file($path)) {
+        abort(404, 'JSON cache file not found.');
+    }
+
+    return response()->download($path, 'crowdmark_booklet_pages_' . $cacheKey . '.json', [
+        'Content-Type' => 'application/json',
+    ]);
+})->name('crowdmark.download-booklet-pages-json');
+```
+
+Route 5. Download JSON cache by token (custom json_path support).
+
+```php
+Route::get('/crowdmark/booklet-pages-json-token/{token}', function (string $token) {
+    $raw = Cache::get("crowdmark_json_{$token}");
+    $path = (string) ($raw['path'] ?? '');
+
+    if (!is_array($raw) || ($raw['status'] ?? '') !== 'done' || $path === '' || !is_file($path)) {
+        abort(404, 'JSON cache file not ready.');
+    }
+
+    return response()->download($path, basename($path) ?: 'crowdmark_booklet_pages.json', [
+        'Content-Type' => 'application/json',
+    ]);
+})->name('crowdmark.download-booklet-pages-json-by-token');
+```
+
+Route 6. Queue single-page PDF generation for all selected assessments.
+
+```php
 Route::post('/crowdmark/download-pages', function (Request $request) {
     $assessmentIds = array_values(array_filter(
         array_map('trim', explode(',', $request->input('assessment_ids', '')))
@@ -101,7 +181,49 @@ Route::post('/crowdmark/download-pages', function (Request $request) {
 
     return response()->json(['token' => $token]);
 })->name('crowdmark.download-pages');
+```
 
+Route 7. Poll single-page PDF job status.
+
+```php
+Route::get('/crowdmark/pdf-status/{token}', function (string $token) {
+    $raw = Cache::get("crowdmark_pdf_{$token}");
+
+    if ($raw === null) {
+        return response()->json(['status' => 'not_found'], 404);
+    }
+
+    if (str_starts_with((string) $raw, 'failed:')) {
+        return response()->json(['status' => 'failed', 'error' => substr((string) $raw, 7)]);
+    }
+
+    return response()->json(['status' => $raw]);
+})->name('crowdmark.pdf-status');
+```
+
+Route 8. Download generated single-page PDF.
+
+```php
+Route::get('/crowdmark/pdf-download/{token}', function (string $token) {
+    $status = Cache::get("crowdmark_pdf_{$token}");
+    if ($status !== 'done') {
+        abort(404, 'PDF not ready.');
+    }
+
+    $path = "crowdmark-pdfs/{$token}.pdf";
+    if (!Storage::exists($path)) {
+        abort(404, 'PDF file missing.');
+    }
+
+    return response()->download(Storage::path($path), "pages_{$token}.pdf", [
+        'Content-Type' => 'application/pdf',
+    ]);
+})->name('crowdmark.pdf-download');
+```
+
+Route 9. Queue odd-pages ZIP generation (supports baseline json_path + zip_save_path).
+
+```php
 Route::post('/crowdmark/download-odd-pages', function (Request $request) {
     $assessmentIds = array_values(array_filter(
         array_map('trim', explode(',', $request->input('assessment_ids', '')))
@@ -124,23 +246,11 @@ Route::post('/crowdmark/download-odd-pages', function (Request $request) {
 
     return response()->json(['token' => $token]);
 })->name('crowdmark.download-odd-pages');
+```
 
-Route::get('/crowdmark/pdf-download/{token}', function (string $token) {
-    $status = Cache::get("crowdmark_pdf_{$token}");
-    if ($status !== 'done') {
-        abort(404, 'PDF not ready.');
-    }
+Route 10. Download generated odd-pages ZIP.
 
-    $path = "crowdmark-pdfs/{$token}.pdf";
-    if (!Storage::exists($path)) {
-        abort(404, 'PDF file missing.');
-    }
-
-    return response()->download(Storage::path($path), "pages_{$token}.pdf", [
-        'Content-Type' => 'application/pdf',
-    ]);
-})->name('crowdmark.pdf-download');
-
+```php
 Route::get('/crowdmark/zip-download/{token}', function (string $token) {
     $status = Cache::get("crowdmark_pdf_{$token}");
     if ($status !== 'done') {
