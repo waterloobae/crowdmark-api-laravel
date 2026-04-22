@@ -1,7 +1,7 @@
 <?php
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 require_once __DIR__ . '/../vendor/autoload.php';
-use Waterloobae\CrowdmarkDashboard\Crowdmark;
+use Waterloobae\CrowdmarkApiLaravel\Crowdmark;
 $crowdmark_api_key = "your_crowdmark_api_key";
 $dashboard = new Dashboard($crowdmark_api_key);
 

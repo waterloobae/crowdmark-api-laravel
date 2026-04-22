@@ -1,5 +1,5 @@
 <?php
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 
 class Engine
 {

@@ -1,5 +1,5 @@
 <?php
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 if (session_status() === PHP_SESSION_NONE) {
   session_start();
 } elseif (session_status() !== PHP_SESSION_ACTIVE) {
@@ -7,7 +7,7 @@ if (session_status() === PHP_SESSION_NONE) {
   session_start();
 }
 require_once __DIR__ . '/../vendor/autoload.php';
-use Waterloobae\CrowdmarkDashboard\Dashboard;
+use Waterloobae\CrowdmarkApiLaravel\Dashboard;
 $crowdmark_api_key = "your_crowdmark_api_key";
 $dashboard = new Dashboard($crowdmark_api_key);
 ?>

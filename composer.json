@@ -1,5 +1,5 @@
 {
-    "name": "waterloobae/crowdmarkdashboard",
+    "name": "waterloobae/crowdmarkapilaravel",
     "description": "A dashboard for crowdmark",
     "license": "MIT",
     "require": {
@@ -11,14 +11,7 @@
     },
     "autoload": {
         "psr-4": {
-            "Waterloobae\\CrowdmarkDashboard\\": "src"
-        }
-    },
-    "extra": {
-        "laravel": {
-            "providers": [
-                "Waterloobae\\CrowdmarkDashboard\\CrowdmarkServiceProvider"
-            ]
+            "Waterloobae\\CrowdmarkApiLaravel\\": "src"
         }
     }
 }

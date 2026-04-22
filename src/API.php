@@ -1,6 +1,6 @@
 <?php
 
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 
 use Exception;
 use Illuminate\Http\Client\Response;
@@ -33,6 +33,17 @@ class API
 
     public function buildApiKeyString()
     {
+        $envBaseUrl = env('CROWDMARK_BASE_URL');
+        if (is_string($envBaseUrl) && $envBaseUrl !== '') {
+            $this->url = rtrim($envBaseUrl, '/') . '/';
+        }
+
+        $envApiKey = env('CROWDMARK_API_KEY');
+        if (is_string($envApiKey) && $envApiKey !== '') {
+            $this->api_key = $envApiKey;
+            return;
+        }
+
         if (function_exists('config')) {
             $configuredBaseUrl = config('services.crowdmark.base_url');
             if (is_string($configuredBaseUrl) && $configuredBaseUrl !== '') {
@@ -44,12 +55,6 @@ class API
                 $this->api_key = $configuredApiKey;
                 return;
             }
-        }
-
-        $envApiKey = env('CROWDMARK_API_KEY');
-        if (is_string($envApiKey) && $envApiKey !== '') {
-            $this->api_key = $envApiKey;
-            return;
         }
     }
 

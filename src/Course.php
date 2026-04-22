@@ -1,10 +1,10 @@
 <?php
 
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 // include_once '../src/API.php';
 // include_once '../src/Assessment.php';
-use Waterloobae\CrowdmarkDashboard\API;
-use Waterloobae\CrowdmarkDashboard\Assessment;
+use Waterloobae\CrowdmarkApiLaravel\API;
+use Waterloobae\CrowdmarkApiLaravel\Assessment;
 
 class Course{
     protected object $logger;

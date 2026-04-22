@@ -1,6 +1,6 @@
 <?php
 
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 
 class Page{
     protected object $logger;
@@ -11,6 +11,8 @@ class Page{
     protected string $page_url;
     protected string $page_number;
     protected string $self_link;
+    protected string $created_at;
+    protected string $updated_at;
  
     public function __construct(string $assessment_id,string $booklet_id, object $page, object $logger)
     {
@@ -24,6 +26,11 @@ class Page{
         $this->page_url = $page->attributes->url;
         $this->page_number = $page->attributes->number;
         $this->self_link = $page->links->self ?? '';
+
+        $createdAt = 'created-at';
+        $updatedAt = 'updated-at';
+        $this->created_at = (string) ($page->attributes->$createdAt ?? '');
+        $this->updated_at = (string) ($page->attributes->$updatedAt ?? '');
     }
 
     public function getResponseIds()
@@ -59,5 +66,15 @@ class Page{
     public function getBookletId()
     {
         return $this->booklet_id;
+    }
+
+    public function getCreatedAt()
+    {
+        return $this->created_at;
+    }
+
+    public function getUpdatedAt()
+    {
+        return $this->updated_at;
     }
 }

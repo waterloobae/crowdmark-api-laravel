@@ -1,9 +1,9 @@
 <?php
 
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 //include_once '../src/API.php';
-use Waterloobae\CrowdmarkDashboard\API;
-use Waterloobae\CrowdmarkDashboard\Page;
+use Waterloobae\CrowdmarkApiLaravel\API;
+use Waterloobae\CrowdmarkApiLaravel\Page;
 
 class Response{
     protected object $logger;

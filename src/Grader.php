@@ -1,6 +1,6 @@
 <?php
 
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 
 class Grader{
     protected object $logger;

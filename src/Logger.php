@@ -1,5 +1,5 @@
 <?php
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();

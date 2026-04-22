@@ -1,12 +1,12 @@
 <?php
-namespace Waterloobae\CrowdmarkDashboard;
+namespace Waterloobae\CrowdmarkApiLaravel;
 
 include_once 'Logger.php';
 
-use Waterloobae\CrowdmarkDashboard\API;
-use Waterloobae\CrowdmarkDashboard\Course;
-use Waterloobae\CrowdmarkDashboard\Assessment;
-use Waterloobae\CrowdmarkDashboard\Logger;
+use Waterloobae\CrowdmarkApiLaravel\API;
+use Waterloobae\CrowdmarkApiLaravel\Course;
+use Waterloobae\CrowdmarkApiLaravel\Assessment;
+use Waterloobae\CrowdmarkApiLaravel\Logger;
 
 use Illuminate\Support\Facades\Http;
 use setasign\Fpdi\Fpdi;
@@ -124,11 +124,11 @@ class Crowdmark
         return sha1(implode('|', $normalized));
     }
 
-    public function saveBookletPageIndexJson(array $assessment_ids, bool $forceRefresh = false): array
+    public function saveBookletPageIndexJson(array $assessment_ids, bool $forceRefresh = false, ?string $savePath = null): array
     {
-        $index = $this->getOrBuildBookletPageIndex($assessment_ids, $forceRefresh);
+        $index = $this->getOrBuildBookletPageIndex($assessment_ids, $forceRefresh, $savePath);
         $cacheKey = (string) ($index['cache_key'] ?? $this->getBookletPageCacheKey($assessment_ids));
-        $cachePath = $this->getBookletPageCacheFilePath($cacheKey);
+        $cachePath = $this->resolveBookletPageSavePath($savePath, $cacheKey);
 
         $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if ($json === false) {
@@ -143,14 +143,15 @@ class Crowdmark
             'cache_key' => $cacheKey,
             'path' => $cachePath,
             'count' => count($index['booklet_pages'] ?? []),
-            'created_at' => $index['created_at'] ?? date('c'),
+            'created_at' => (string) ($index['created_at'] ?? ''),
+            'updated_at' => (string) ($index['updated_at'] ?? ''),
         ];
     }
 
-    public function loadBookletPageIndexJsonByAssessmentIds(array $assessment_ids): ?array
+    public function loadBookletPageIndexJsonByAssessmentIds(array $assessment_ids, ?string $savePath = null): ?array
     {
         $cacheKey = $this->getBookletPageCacheKey($assessment_ids);
-        $cachePath = $this->getBookletPageCacheFilePath($cacheKey);
+        $cachePath = $this->resolveBookletPageSavePath($savePath, $cacheKey);
         if (!is_file($cachePath)) {
             return null;
         }
@@ -168,21 +169,35 @@ class Crowdmark
         return $decoded;
     }
 
-    private function getOrBuildBookletPageIndex(array $assessment_ids, bool $forceRefresh = false): array
+    private function getOrBuildBookletPageIndex(array $assessment_ids, bool $forceRefresh = false, ?string $savePath = null): array
     {
         $cacheKey = $this->getBookletPageCacheKey($assessment_ids);
+        $cached = $this->loadBookletPageIndexJsonByAssessmentIds($assessment_ids, $savePath);
 
         if (!$forceRefresh) {
-            $cached = $this->loadBookletPageIndexJsonByAssessmentIds($assessment_ids);
             if (is_array($cached) && isset($cached['booklet_pages']) && is_array($cached['booklet_pages'])) {
+                if (!isset($cached['created_at'])) {
+                    $cached['created_at'] = $this->deriveIndexCreatedAt($cached['booklet_pages']);
+                }
+                if (!isset($cached['updated_at'])) {
+                    $cached['updated_at'] = $this->deriveIndexUpdatedAt($cached['booklet_pages'], (string) ($cached['created_at'] ?? ''));
+                }
+
                 return $cached;
             }
         }
 
         $index = $this->buildBookletPageIndex($assessment_ids);
         $index['cache_key'] = $cacheKey;
+        if (is_array($cached) && isset($cached['created_at'])) {
+            $index['created_at'] = (string) $cached['created_at'];
+        }
+        $index['updated_at'] = $this->deriveIndexUpdatedAt(
+            $index['booklet_pages'] ?? [],
+            (string) ($cached['updated_at'] ?? $index['created_at'] ?? '')
+        );
 
-        $cachePath = $this->getBookletPageCacheFilePath($cacheKey);
+        $cachePath = $this->resolveBookletPageSavePath($savePath, $cacheKey);
         $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if ($json !== false) {
             file_put_contents($cachePath, $json);
@@ -202,6 +217,11 @@ class Crowdmark
 
             foreach ($assessment->getBooklets() as $booklet) {
                 foreach ($booklet->getPages() as $page) {
+                    $pageNumber = (int) $page->getPageNumber();
+                    if ($pageNumber <= 0 || ($pageNumber % 2) === 0) {
+                        continue;
+                    }
+
                     $selfLink = trim((string) $page->getSelfLink());
                     if ($selfLink === '') {
                         $selfLink = 'api/pages/' . $page->getPageId();
@@ -211,17 +231,23 @@ class Crowdmark
                         'assessment_id' => (string) $assessment->getAssessmentID(),
                         'booklet_id' => (string) $booklet->getBookletId(),
                         'booklet_number' => (string) $booklet->getBookletNumber(),
-                        'page_number' => (string) $page->getPageNumber(),
+                        'page_number' => (string) $pageNumber,
                         'self_link' => $selfLink,
                         'page_url' => (string) $page->getPageUrl(),
+                        'created_at' => (string) ($page->getCreatedAt() ?: ''),
+                        'updated_at' => (string) ($page->getUpdatedAt() ?: $page->getCreatedAt() ?: ''),
                     ];
                 }
             }
         }
 
+        $indexCreatedAt = $this->deriveIndexCreatedAt($bookletPages);
+        $indexUpdatedAt = $this->deriveIndexUpdatedAt($bookletPages, $indexCreatedAt);
+
         return [
             'version' => 1,
-            'created_at' => date('c'),
+            'created_at' => $indexCreatedAt,
+            'updated_at' => $indexUpdatedAt,
             'assessment_ids' => $normalizedAssessmentIds,
             'booklet_pages' => $bookletPages,
         ];
@@ -254,6 +280,46 @@ class Crowdmark
     private function getBookletPageCacheFilePath(string $cacheKey): string
     {
         return $this->getBookletPageCacheDirectory() . DIRECTORY_SEPARATOR . $cacheKey . '.json';
+    }
+
+    private function resolveBookletPageSavePath(?string $savePath, string $cacheKey): string
+    {
+        if ($savePath === null || trim($savePath) === '') {
+            return $this->getBookletPageCacheFilePath($cacheKey);
+        }
+
+        $normalized = str_replace('\\', '/', trim($savePath));
+        $normalized = ltrim($normalized, '/');
+        if ($normalized === '') {
+            return $this->getBookletPageCacheFilePath($cacheKey);
+        }
+
+        foreach (explode('/', $normalized) as $segment) {
+            if ($segment === '' || $segment === '.') {
+                continue;
+            }
+
+            if ($segment === '..') {
+                throw new \InvalidArgumentException('Invalid JSON save path.');
+            }
+        }
+
+        if (pathinfo($normalized, PATHINFO_EXTENSION) === '') {
+            $normalized .= '.json';
+        }
+
+        $base = function_exists('storage_path')
+            ? storage_path('app')
+            : rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR);
+
+        $targetPath = rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $normalized);
+        $targetDirectory = dirname($targetPath);
+
+        if (!is_dir($targetDirectory)) {
+            @mkdir($targetDirectory, 0755, true);
+        }
+
+        return $targetPath;
     }
 
     //=================================
@@ -502,10 +568,31 @@ class Crowdmark
      *
      * @param  string[] $assessment_ids
      * @param  int      $maxPage  Highest page number to consider (inclusive). Default 39.
+     * @param  string|null $jsonPath Optional path (relative to storage/app) for booklet/page JSON cache.
      */
-    public function generateOddPagesPdfZip(array $assessment_ids, int $maxPage = 39): string
+    public function generateOddPagesPdfZip(array $assessment_ids, int $maxPage = 39, ?string $jsonPath = null): string
     {
-        $index = $this->getOrBuildBookletPageIndex($assessment_ids);
+        $cacheKey = $this->getBookletPageCacheKey($assessment_ids);
+        $baselineIndex = $this->loadBookletPageIndexJsonByAssessmentIds($assessment_ids, $jsonPath);
+        $index = $this->buildBookletPageIndex($assessment_ids);
+        $index['cache_key'] = $cacheKey;
+        if (is_array($baselineIndex) && isset($baselineIndex['created_at'])) {
+            $index['created_at'] = (string) $baselineIndex['created_at'];
+        }
+        $index['updated_at'] = $this->deriveIndexUpdatedAt(
+            $index['booklet_pages'] ?? [],
+            (string) ($baselineIndex['updated_at'] ?? $index['created_at'] ?? '')
+        );
+
+        $baselineByPageKey = [];
+        foreach (($baselineIndex['booklet_pages'] ?? []) as $entry) {
+            $pageKey = $this->bookletPageBaselineKey($entry);
+            if ($pageKey === '') {
+                continue;
+            }
+
+            $baselineByPageKey[$pageKey] = $this->normalizedUpdatedAt($entry);
+        }
 
         // Build booklet-based odd-page index.
         $booklets = [];
@@ -514,6 +601,18 @@ class Crowdmark
             $pageUrl = trim((string) ($entry['page_url'] ?? ''));
 
             if ($pageNumber <= 0 || $pageNumber > $maxPage || ($pageNumber % 2) === 0 || $pageUrl === '') {
+                continue;
+            }
+
+            $pageKey = $this->bookletPageBaselineKey($entry);
+            if ($pageKey === '') {
+                continue;
+            }
+
+            $latestUpdatedAt = $this->normalizedUpdatedAt($entry);
+            $baselineUpdatedAt = $baselineByPageKey[$pageKey] ?? null;
+
+            if ($baselineUpdatedAt !== null && $baselineUpdatedAt === $latestUpdatedAt) {
                 continue;
             }
 
@@ -535,7 +634,7 @@ class Crowdmark
         }
 
         if (empty($booklets)) {
-            throw new \RuntimeException('No odd page URLs were found in cached booklet data.');
+            throw new \RuntimeException('No new or updated odd pages were found compared to baseline JSON.');
         }
 
         $booklets = array_values($booklets);
@@ -557,8 +656,12 @@ class Crowdmark
         }
         unset($booklet);
 
-        // Build PDFs booklet-by-booklet, splitting every 1,000 pages.
-        $maxPagesPerPdf = 1000;
+        // Build PDFs booklet-by-booklet, splitting aggressively to cap memory growth.
+        $maxPagesPerPdf = 120;
+        $memoryLimit = $this->parseBytesFromIni((string) ini_get('memory_limit'));
+        $memoryFlushThreshold = $memoryLimit > 0
+            ? (int) floor($memoryLimit * 0.65)
+            : 0;
         $zipPath = tempnam(sys_get_temp_dir(), 'cm_odd_') . '.zip';
         $zip = new \ZipArchive();
         if ($zip->open($zipPath, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
@@ -578,6 +681,9 @@ class Crowdmark
 
             $tmpPdfPath = tempnam(sys_get_temp_dir(), 'cm_pdf_') . '.pdf';
             $pdf->Output('F', $tmpPdfPath);
+            if (method_exists($pdf, 'Close')) {
+                $pdf->Close();
+            }
 
             $zip->addFile($tmpPdfPath, sprintf('Odd_Booklet_Part_%03d.pdf', $partNumber));
             $pdfTmpFiles[] = $tmpPdfPath;
@@ -585,19 +691,20 @@ class Crowdmark
             $partNumber++;
             $currentPdfPageCount = 0;
             $pdf = new Fpdi();
+
+            if (function_exists('gc_collect_cycles')) {
+                gc_collect_cycles();
+            }
         };
 
         foreach ($booklets as $booklet) {
             foreach ($booklet['pages'] as $page) {
                 $url = (string) $page['page_url'];
 
-                $imageBytes = $this->fetchImageBytes($url);
-                if ($imageBytes === '') {
+                $imgPath = $this->fetchImageToTempFile($url);
+                if ($imgPath === null) {
                     continue;
                 }
-
-                $imgPath = tempnam(sys_get_temp_dir(), 'cm_img_') . '.jpg';
-                file_put_contents($imgPath, $imageBytes);
 
                 try {
                     $size = @getimagesize($imgPath);
@@ -611,7 +718,8 @@ class Crowdmark
                     $pagesAdded++;
                     $currentPdfPageCount++;
 
-                    if ($currentPdfPageCount >= $maxPagesPerPdf) {
+                    $shouldFlushForMemory = $memoryFlushThreshold > 0 && memory_get_usage(true) >= $memoryFlushThreshold;
+                    if ($currentPdfPageCount >= $maxPagesPerPdf || $shouldFlushForMemory) {
                         $flushCurrentPdf();
                     }
                 } finally {
@@ -638,7 +746,165 @@ class Crowdmark
             throw new \RuntimeException('No page images could be downloaded — the ZIP would be empty.');
         }
 
+        $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($json === false) {
+            throw new \RuntimeException('Failed to encode refreshed booklet/page JSON cache.');
+        }
+
+        $cachePath = $this->resolveBookletPageSavePath($jsonPath, $cacheKey);
+        if (file_put_contents($cachePath, $json) === false) {
+            throw new \RuntimeException('Failed to write refreshed booklet/page JSON cache to disk.');
+        }
+
         return $zipPath;
+    }
+
+    private function bookletPageBaselineKey(array $entry): string
+    {
+        $assessmentId = trim((string) ($entry['assessment_id'] ?? ''));
+        $bookletId = trim((string) ($entry['booklet_id'] ?? ''));
+        $pageNumber = trim((string) ($entry['page_number'] ?? ''));
+
+        if ($assessmentId === '' || $bookletId === '' || $pageNumber === '') {
+            return '';
+        }
+
+        return $assessmentId . '|' . $bookletId . '|' . $pageNumber;
+    }
+
+    private function normalizedUpdatedAt(array $entry): string
+    {
+        $updatedAt = trim((string) ($entry['updated_at'] ?? ''));
+        if ($updatedAt !== '') {
+            return $updatedAt;
+        }
+
+        return trim((string) ($entry['created_at'] ?? ''));
+    }
+
+    private function deriveIndexCreatedAt(array $bookletPages, string $fallback = ''): string
+    {
+        $oldestTimestamp = null;
+        $oldestRaw = '';
+
+        foreach ($bookletPages as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $candidate = trim((string) ($entry['created_at'] ?? ''));
+            if ($candidate === '') {
+                $candidate = trim((string) ($entry['updated_at'] ?? ''));
+            }
+            if ($candidate === '') {
+                continue;
+            }
+
+            $candidateTimestamp = strtotime($candidate);
+            if ($candidateTimestamp === false) {
+                continue;
+            }
+
+            if ($oldestTimestamp === null || $candidateTimestamp < $oldestTimestamp) {
+                $oldestTimestamp = $candidateTimestamp;
+                $oldestRaw = $candidate;
+            }
+        }
+
+        if ($oldestRaw !== '') {
+            return $oldestRaw;
+        }
+
+        return $fallback;
+    }
+
+    private function deriveIndexUpdatedAt(array $bookletPages, string $fallback = ''): string
+    {
+        $latestTimestamp = null;
+        $latestRaw = '';
+
+        foreach ($bookletPages as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $candidate = $this->normalizedUpdatedAt($entry);
+            if ($candidate === '') {
+                continue;
+            }
+
+            $candidateTimestamp = strtotime($candidate);
+            if ($candidateTimestamp === false) {
+                continue;
+            }
+
+            if ($latestTimestamp === null || $candidateTimestamp > $latestTimestamp) {
+                $latestTimestamp = $candidateTimestamp;
+                $latestRaw = $candidate;
+            }
+        }
+
+        if ($latestRaw !== '') {
+            return $latestRaw;
+        }
+
+        return $fallback;
+    }
+
+    private function parseBytesFromIni(string $value): int
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '' || $trimmed === '-1') {
+            return -1;
+        }
+
+        $suffix = strtolower(substr($trimmed, -1));
+        $number = (int) $trimmed;
+
+        switch ($suffix) {
+            case 'g':
+                $number *= 1024;
+                // no break
+            case 'm':
+                $number *= 1024;
+                // no break
+            case 'k':
+                $number *= 1024;
+                break;
+        }
+
+        return $number;
+    }
+
+    private function fetchImageToTempFile(string $url): ?string
+    {
+        if (!class_exists(Http::class)) {
+            return null;
+        }
+
+        $tmpPath = tempnam(sys_get_temp_dir(), 'cm_img_');
+        if ($tmpPath === false) {
+            return null;
+        }
+
+        $tmpPathWithExt = $tmpPath . '.jpg';
+        @rename($tmpPath, $tmpPathWithExt);
+
+        try {
+            $response = Http::timeout(60)
+                ->withOptions(['sink' => $tmpPathWithExt])
+                ->get($url);
+
+            if (!$response->successful() || !is_file($tmpPathWithExt) || filesize($tmpPathWithExt) === 0) {
+                @unlink($tmpPathWithExt);
+                return null;
+            }
+
+            return $tmpPathWithExt;
+        } catch (\Throwable $e) {
+            @unlink($tmpPathWithExt);
+            return null;
+        }
     }
 
     public function downloadPagesByPageNumber(array $assessment_ids, string $page_number)

@@ -1,140 +1,238 @@
 # Crowdmark Dashboard
 
-## Instructions for Composer Package
-Install this package
-`composer require waterloobae/crowdmarkdashboard`
+## Install
 
-Make sure that your server environment variable for Crowdmark API is available for better security.
-
-In Linux (.bashrc, .bash_profile, or CI/CD settings):
-`export CROWDMARK_API_KEY="your-secret-key"`
-
-For Docker (docker-compose.yml):
-```
-environment:
-  - CROWDMARK_API_KEY=your-secret-key
+```bash
+composer require waterloobae/crowdmarkapilaravel
 ```
 
-For .env file (if using Laravel or Symfony):
-`CROWDMARK_API_KEY=your-secret-key`
+Set environment variables:
 
-In your PHP file,
-1. Include outoload file
-   `require 'vendor/autoload.php';`
-2. Define name space
-   `namespace Waterloobae\CrowdmarkDashboard;`
-3. Create new Dashboard object and run getForm() method.
-   ```php
-   use Waterloobae\CrowdmarkDashboard\Dashboard;
-   $dashboard = new Dashboard('crowdmark api key');
-   $dashboard->getForm()   
-   ```
-    
-It will look like
+```env
+CROWDMARK_API_KEY=your-secret-key
+CROWDMARK_BASE_URL=https://app.crowdmark.com/
+```
+
+No package service provider or publish step is required for Crowdmark config.
+
+You can use `.env` only (plus optional host `services.php` fallback).
+
+Optional `config/services.php` fallback:
+
+```php
+// config/services.php
+
+return [
+    // ... existing services
+
+    'crowdmark' => [
+        'base_url' => env('CROWDMARK_BASE_URL', 'https://app.crowdmark.com/'),
+        'api_key' => env('CROWDMARK_API_KEY'),
+    ],
+];
+```
+
+## Queue Jobs Included In Package
+
+These queue jobs are provided by the package and can be dispatched directly:
+
+- `Waterloobae\CrowdmarkApiLaravel\Jobs\GenerateCrowdmarkBookletPagesJsonJob`
+- `Waterloobae\CrowdmarkApiLaravel\Jobs\GenerateCrowdmarkPagesPdfJob`
+- `Waterloobae\CrowdmarkApiLaravel\Jobs\GenerateCrowdmarkOddPagesPdfJob`
+
+Run a worker for async operations:
+
+```bash
+php artisan queue:work --timeout=0 --tries=1
+```
+
+## Host App Integration Example (Routes Source)
+
+`routes/web.php` is not part of this package. Add routes like the following in your app.
+
 ```php
 <?php
-namespace Waterloobae\CrowdmarkDashboard;
-if (session_status() == PHP_SESSION_NONE) {
-    session_start();
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Storage;
+use Waterloobae\CrowdmarkApiLaravel\Jobs\GenerateCrowdmarkBookletPagesJsonJob;
+use Waterloobae\CrowdmarkApiLaravel\Jobs\GenerateCrowdmarkPagesPdfJob;
+use Waterloobae\CrowdmarkApiLaravel\Jobs\GenerateCrowdmarkOddPagesPdfJob;
+
+Route::get('/crowdmark', function () {
+    return view('crowdmark');
+})->name('crowdmark');
+
+Route::post('/crowdmark/save-booklet-pages-json', function (Request $request) {
+    $assessmentIds = array_values(array_filter(
+        array_map('trim', explode(',', $request->input('assessment_ids', '')))
+    ));
+
+    if (empty($assessmentIds)) {
+        return response()->json(['error' => 'No assessment IDs provided.'], 422);
+    }
+
+    $forceRefresh = filter_var($request->input('force_refresh', false), FILTER_VALIDATE_BOOL);
+    $jsonPath = trim((string) $request->input('json_path', '')) ?: null;
+
+    $token = \Illuminate\Support\Str::uuid()->toString();
+    Cache::put("crowdmark_json_{$token}", ['status' => 'pending'], now()->addHours(24));
+
+    GenerateCrowdmarkBookletPagesJsonJob::dispatch($token, $assessmentIds, $forceRefresh, $jsonPath);
+
+    return response()->json(['token' => $token]);
+})->name('crowdmark.save-booklet-pages-json');
+
+Route::post('/crowdmark/download-pages', function (Request $request) {
+    $assessmentIds = array_values(array_filter(
+        array_map('trim', explode(',', $request->input('assessment_ids', '')))
+    ));
+
+    if (empty($assessmentIds)) {
+        return response()->json(['error' => 'No assessment IDs provided.'], 422);
+    }
+
+    $token = \Illuminate\Support\Str::uuid()->toString();
+    Cache::put("crowdmark_pdf_{$token}", 'pending', now()->addHours(2));
+
+    GenerateCrowdmarkPagesPdfJob::dispatch($token, $assessmentIds, (string) $request->input('page', '1'));
+
+    return response()->json(['token' => $token]);
+})->name('crowdmark.download-pages');
+
+Route::post('/crowdmark/download-odd-pages', function (Request $request) {
+    $assessmentIds = array_values(array_filter(
+        array_map('trim', explode(',', $request->input('assessment_ids', '')))
+    ));
+
+    if (empty($assessmentIds)) {
+        return response()->json(['error' => 'No assessment IDs provided.'], 422);
+    }
+
+    $token = \Illuminate\Support\Str::uuid()->toString();
+    Cache::put("crowdmark_pdf_{$token}", 'pending', now()->addHours(24));
+
+    GenerateCrowdmarkOddPagesPdfJob::dispatch(
+        $token,
+        $assessmentIds,
+        (int) $request->input('max_page', 39),
+        trim((string) $request->input('json_path', '')) ?: null,
+        trim((string) $request->input('zip_save_path', '')) ?: null,
+    );
+
+    return response()->json(['token' => $token]);
+})->name('crowdmark.download-odd-pages');
+
+Route::get('/crowdmark/pdf-download/{token}', function (string $token) {
+    $status = Cache::get("crowdmark_pdf_{$token}");
+    if ($status !== 'done') {
+        abort(404, 'PDF not ready.');
+    }
+
+    $path = "crowdmark-pdfs/{$token}.pdf";
+    if (!Storage::exists($path)) {
+        abort(404, 'PDF file missing.');
+    }
+
+    return response()->download(Storage::path($path), "pages_{$token}.pdf", [
+        'Content-Type' => 'application/pdf',
+    ]);
+})->name('crowdmark.pdf-download');
+
+Route::get('/crowdmark/zip-download/{token}', function (string $token) {
+    $status = Cache::get("crowdmark_pdf_{$token}");
+    if ($status !== 'done') {
+        abort(404, 'ZIP not ready.');
+    }
+
+    $path = (string) Cache::get("crowdmark_pdf_path_{$token}", "crowdmark-pdfs/{$token}.zip");
+    if (!Storage::exists($path)) {
+        abort(404, 'ZIP file missing.');
+    }
+
+    return response()->download(Storage::path($path), basename($path) ?: "odd_pages_{$token}.zip", [
+        'Content-Type' => 'application/zip',
+    ]);
+})->name('crowdmark.zip-download');
+```
+
+## Host App Integration Example (Blade Source)
+
+`resources/views/crowdmark.blade.php` is not part of this package. Example form snippets:
+
+```blade
+<h2>Save Booklet/Page JSON Cache</h2>
+<form id="json-cache-form">
+    @csrf
+    <textarea name="assessment_ids" rows="3" cols="60"></textarea>
+
+    <label>
+        <input name="force_refresh" type="checkbox" value="1">
+        Force refresh from API
+    </label>
+
+    <input name="json_path" type="text" placeholder="crowdmark-cache/custom/booklet-pages.json">
+    <button type="submit">Save JSON Cache</button>
+</form>
+
+<h2>All odd pages - ZIP of booklet-based PDFs</h2>
+<form id="zip-form">
+    @csrf
+    <textarea name="assessment_ids" rows="3" cols="60"></textarea>
+    <input name="max_page" type="number" min="1" value="39">
+    <input name="json_path" type="text" placeholder="crowdmark-cache/custom/booklet-pages.json">
+    <input name="zip_save_path" type="text" placeholder="crowdmark-pdfs/custom/odd-pages.zip">
+    <button type="submit">Generate ZIP</button>
+</form>
+```
+
+Async submit/poll pattern (example):
+
+```html
+<script>
+async function postForm(url, form) {
+    const formData = new FormData(form);
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'X-CSRF-TOKEN': formData.get('_token'),
+            'Accept': 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams(formData),
+    });
+    return res.json();
 }
 
-include_once($_SERVER['DOCUMENT_ROOT'].'/vendor/autoload.php');
-use Waterloobae\CrowdmarkDashboard\Dashboard;
-?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Crowdmark Dashboard</title>
-    </head>
-<body>
-    <?php
-        $crowdmark_api_key = "your Crowdmark API key";
-        $dashboard = new Dashboard($crowdmark_api_key);
-        $dashboard->getForm()
-    ?></body>
-</html>
+async function pollStatus(statusUrl, onDone) {
+    const timer = setInterval(async () => {
+        const res = await fetch(statusUrl, { headers: { 'Accept': 'application/json' } });
+        const data = await res.json();
+        if (data.status === 'done') {
+            clearInterval(timer);
+            onDone(data);
+        }
+        if (data.status === 'failed') {
+            clearInterval(timer);
+            console.error(data.error ?? 'Job failed');
+        }
+    }, 5000);
+}
+</script>
 ```
 
-## Features
-1. Download cover pages or 2nd pages of selected courses.
-2. Generate student information csv file of selected courses
-3. Generate student email list csv file
-4. Generate CSV file of how many questions are graded for selected courses
-5. How many questions are graded for each graders are listed in CSV file
-6. How many booklets are uploaded and matched are listed for selected courses.
-7. It checks how many response are available for grading compared to the number of uploaded booklets to check integrity 
+## Odd-pages Incremental Behavior
 
-## Release Notes : version 1.00.0
-API call rate limiting of 10 requests per second is enforced.
+Odd-pages ZIP uses JSON as baseline and only downloads changed/new odd pages by checking:
 
-API call for responses is made for each booklet, that created around 2,500 API calls. As a result of that, it take around 30 minutes to create one Assessment. /api/responses/*response_id* is used for this.
+- `assessment_id`
+- `booklet_id`
+- `page_number`
+- `updated_at`
 
-Instead of using /api/questions/question_id/responses. Multi curls for /api/booklets/booklet_id/responses are used. It reduces response time from 30 minutes to 2 minutes.
+After a successful ZIP run with downloaded pages, JSON cache is refreshed at `json_path` (or default path).
 
-## Crowdmark API Endpoints
-
-**GET courses**  
-`https://app.crowdmark.com/api/courses?api_key=your_api_key`
-
-**GET one course**  
-`https://app.crowdmark.com/api/courses/{course id}?api_key=your_api_key`
-
-**GET assessments of one course**  
-`https://app.crowdmark.com/api/courses/{course id}/assessments?api_key=your_api_key`
-
-**GET one assessment**  
-`https://app.crowdmark.com/api/assessments/{assessment id}?api_key=your_api_key`
-
-**GET all booklets from assessment (paged)**  
-`https://app.crowdmark.com/api/assessments/{assessment id}/booklets?api_key=your_api_key`
-
-**GET one booklet**  
-`https://app.crowdmark.com/api/booklets/{booklet id}?api_key=your_api_key`
-
-**GET one booklet**  
-`https://app.crowdmark.com/api/booklets/{booklet id}?api_key=your_api_key`
-
-**GET responses from one booklet**  
-`https://app.crowdmark.com/api/booklets/{booklet id}/responses?api_key=your_api_key`
-
-**GET pages from one booklet**  
-`https://app.crowdmark.com/api/booklets/{booklet id}/pages?api_key=your_api_key`
-
-**GET scores from response**  
-`https://app.crowdmark.com/api/responses/{response id}/scores?api_key=your_api_key`
-
-**GET pages from response**  
-`https://app.crowdmark.com/api/responses/{response id}/pages?api_key=your_api_key`
-
-**GET one question**  
-`https://app.crowdmark.com/api/questions/{question id}?api_key=your_api_key`
-
-**GET the second page of booklets**  
-`https://app.crowdmark.com/api/assessments/{assessment id}/booklets?page%5Bnumber%5D=2&api_key=your_api_key`
-
-## Class Dependency
-
-```mermaid
-graph TD
-    n1["Dashboard"] --> n2["Crowdmark<br>"]
-    n2 --> n3["Course"]
-    n3 --> n4["Assessment"]
-
-    %% Reordering Question, Booklet, and Grader under Assessment
-    n4 --> n5["Question"]
-    n4 --> n6["Booklet"]
-    n4 --> n7["Grader"]
-
-    %% Booklet connections
-    n6 -- Pages without Responses --> n10["Page"]
-    n6 --> n8["Response"]
-
-    %% Response connections
-    n8 --> n9["Page"]
-
-    %% Question to Response
-    %% n5 -- Times out for Big Assessment --> n8
-```
-It is possible to get Responses from Question, however, it times out for big Assessments.
+Index timestamps are derived from API page timestamps, not system datetime.
 

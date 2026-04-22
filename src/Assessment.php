@@ -1,11 +1,11 @@
 <?php
 
-namespace Waterloobae\CrowdmarkDashboard;
-use Waterloobae\CrowdmarkDashboard\API;
-use Waterloobae\CrowdmarkDashboard\Booklet;
-use Waterloobae\CrowdmarkDashboard\Question;
-use Waterloobae\CrowdmarkDashboard\Response;
-use Waterloobae\CrowdmarkDashboard\Grader;
+namespace Waterloobae\CrowdmarkApiLaravel;
+use Waterloobae\CrowdmarkApiLaravel\API;
+use Waterloobae\CrowdmarkApiLaravel\Booklet;
+use Waterloobae\CrowdmarkApiLaravel\Question;
+use Waterloobae\CrowdmarkApiLaravel\Response;
+use Waterloobae\CrowdmarkApiLaravel\Grader;
 
 use Exception;
 
