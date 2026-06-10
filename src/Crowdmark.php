@@ -232,6 +232,7 @@ class Crowdmark
                         'booklet_id' => (string) $booklet->getBookletId(),
                         'booklet_number' => (string) $booklet->getBookletNumber(),
                         'page_number' => (string) $pageNumber,
+                        'page_id' => (string) $page->getPageId(),
                         'self_link' => $selfLink,
                         'page_url' => (string) $page->getPageUrl(),
                         'created_at' => (string) ($page->getCreatedAt() ?: ''),
@@ -925,12 +926,29 @@ class Crowdmark
         }
     }
 
-    public function downloadPagesByPageNumber(array $assessment_ids, string $page_number)
+    public function downloadPagesByUuid(array $assessment_ids, string $page_uuid, ?string $jsonPath = null)
     {
-        $index = $this->getOrBuildBookletPageIndex($assessment_ids);
+        $index = $this->getOrBuildBookletPageIndex($assessment_ids, false, $jsonPath);
+        $normalizedRequestedUuid = strtolower(trim($page_uuid));
+        if (preg_match('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i', $normalizedRequestedUuid, $requestedMatch) === 1) {
+            $normalizedRequestedUuid = strtolower($requestedMatch[0]);
+        }
+
         $pageUrls = [];
         foreach (($index['booklet_pages'] ?? []) as $entry) {
-            if ((string) ($entry['page_number'] ?? '') === (string) $page_number) {
+            $entryPageUuid = strtolower(trim((string) ($entry['page_id'] ?? '')));
+            if ($entryPageUuid === '') {
+                $selfLink = trim((string) ($entry['self_link'] ?? ''));
+                if ($selfLink !== '') {
+                    if (preg_match('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i', $selfLink, $entryMatch) === 1) {
+                        $entryPageUuid = strtolower($entryMatch[0]);
+                    } else {
+                        $entryPageUuid = strtolower(basename(parse_url($selfLink, PHP_URL_PATH) ?: $selfLink));
+                    }
+                }
+            }
+
+            if ($entryPageUuid === $normalizedRequestedUuid) {
                 $url = (string) ($entry['page_url'] ?? '');
                 if ($url !== '') {
                     $pageUrls[] = $url;
@@ -940,9 +958,9 @@ class Crowdmark
 
         if (empty($pageUrls)) {
             throw new \RuntimeException(
-                'No page URLs found for page number ' . $page_number . ' across ' .
+                'No page URLs found for page UUID ' . $page_uuid . ' across ' .
                 count($index['booklet_pages'] ?? []) .
-                ' cached page rows. The page number may not exist, or cached page data could not be loaded.'
+                ' cached page rows. The UUID may not exist, or cached page data could not be loaded. UUIDs are read from page_id or derived from self_link; full /api/pages/... inputs are also accepted.'
             );
         }
 
@@ -975,7 +993,7 @@ class Crowdmark
         }
 
         $dateTime = date("Ymd_His");
-        $fileName = "Page_".$page_number."_". $dateTime . ".pdf";
+        $fileName = "Page_" . $page_uuid . "_" . $dateTime . ".pdf";
         $pdfContent = $pdf->Output('S');
 
         return $this->downloadBinary(

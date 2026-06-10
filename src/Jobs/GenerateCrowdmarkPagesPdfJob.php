@@ -18,13 +18,14 @@ class GenerateCrowdmarkPagesPdfJob implements ShouldQueue
     public function __construct(
         public readonly string $token,
         public readonly array $assessmentIds,
-        public readonly string $pageNumber,
+        public readonly string $pageUuid,
+        public readonly ?string $jsonPath = null,
     ) {}
 
     public function handle(): void
     {
         $crowdmark = new Crowdmark();
-        $response = $crowdmark->downloadPagesByPageNumber($this->assessmentIds, $this->pageNumber);
+        $response = $crowdmark->downloadPagesByUuid($this->assessmentIds, $this->pageUuid, $this->jsonPath);
 
         $pdfContent = $response->getContent();
 
