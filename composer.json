@@ -13,12 +13,5 @@
         "psr-4": {
             "Waterloobae\\CrowdmarkApiLaravel\\": "src"
         }
-    },
-    "extra": {
-        "laravel": {
-            "providers": [
-                "Waterloobae\\CrowdmarkApiLaravel\\Providers\\CrowdmarkApiLaravelServiceProvider"
-            ]
-        }
     }
 }

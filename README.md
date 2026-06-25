@@ -13,7 +13,26 @@ CROWDMARK_API_KEY=your-secret-key
 CROWDMARK_BASE_URL=https://app.crowdmark.com/
 ```
 
-No package service provider or publish step is required for Crowdmark config.
+## Host Impact (Default Behavior)
+
+This package is non-invasive by default:
+
+- It does not auto-register web routes.
+- It does not auto-register Filament pages.
+- Service provider registration is optional.
+
+If you want package namespaced views (for example `crowdmark-api-laravel::crowdmark` or the packaged Filament view), register the service provider manually in the host app:
+
+```php
+// bootstrap/providers.php
+
+return [
+    // ...
+    Waterloobae\CrowdmarkApiLaravel\Providers\CrowdmarkApiLaravelServiceProvider::class,
+];
+```
+
+If you only use package PHP classes/jobs and do not render package views, you can skip provider registration.
 
 You can use `.env` only (plus optional host `services.php` fallback).
 
@@ -48,7 +67,19 @@ php artisan queue:work --timeout=0 --tries=1
 
 ## Host App Integration Example (Routes Source)
 
-`routes/web.php` is not part of this package. Add routes like the following in your app.
+`routes/web.php` is not part of this package runtime by default. Choose one of these opt-in approaches.
+
+Approach A. Include the packaged route file directly:
+
+```php
+use Illuminate\Support\Facades\Route;
+
+Route::middleware('web')->group(
+    base_path('vendor/waterloobae/crowdmarkapilaravel/routes/web.php')
+);
+```
+
+Approach B. Copy the route examples below into your host app and customize.
 
 Shared imports:
 
@@ -332,6 +363,27 @@ async function pollStatus(statusUrl, onDone) {
 }
 </script>
 ```
+
+## Filament Integration (Optional)
+
+The package includes a Filament page class:
+
+- `Waterloobae\CrowdmarkApiLaravel\Filament\Pages\CrowdmarkExample`
+
+Register it explicitly in your panel provider:
+
+```php
+use Filament\Pages\Dashboard;
+use Waterloobae\CrowdmarkApiLaravel\Filament\Pages\CrowdmarkExample;
+
+// in panel() chain
+->pages([
+    Dashboard::class,
+    CrowdmarkExample::class,
+])
+```
+
+If this page uses package namespaced views, keep the package service provider registered in `bootstrap/providers.php`.
 
 ## Odd-pages Incremental Behavior
 
