@@ -9,6 +9,7 @@ use Waterloobae\CrowdmarkApiLaravel\Assessment;
 use Waterloobae\CrowdmarkApiLaravel\Logger;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use setasign\Fpdi\Fpdi;
 
 class Crowdmark
@@ -124,39 +125,60 @@ class Crowdmark
         return sha1(implode('|', $normalized));
     }
 
-    public function saveBookletPageIndexJson(array $assessment_ids, bool $forceRefresh = false, ?string $savePath = null): array
+    public function saveBookletPageIndexJson(array $assessment_ids, bool $forceRefresh = false, ?string $savePath = null, ?string $disk = null): array
     {
-        $index = $this->getOrBuildBookletPageIndex($assessment_ids, $forceRefresh, $savePath);
+        $index = $this->getOrBuildBookletPageIndex($assessment_ids, $forceRefresh, $savePath, $disk);
         $cacheKey = (string) ($index['cache_key'] ?? $this->getBookletPageCacheKey($assessment_ids));
         $cachePath = $this->resolveBookletPageSavePath($savePath, $cacheKey);
+        $relativePath = $this->resolveBookletPageRelativePath($savePath, $cacheKey);
+        $diskName = $this->resolveDiskName($disk);
 
         $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if ($json === false) {
             throw new \RuntimeException('Failed to encode booklet/page JSON cache.');
         }
 
-        if (file_put_contents($cachePath, $json) === false) {
-            throw new \RuntimeException('Failed to write booklet/page JSON cache to disk.');
+        if (class_exists(Storage::class)) {
+            if (!Storage::disk($diskName)->put($relativePath, $json)) {
+                throw new \RuntimeException('Failed to write booklet/page JSON cache to disk.');
+            }
+        } else {
+            if (file_put_contents($cachePath, $json) === false) {
+                throw new \RuntimeException('Failed to write booklet/page JSON cache to disk.');
+            }
         }
 
         return [
             'cache_key' => $cacheKey,
-            'path' => $cachePath,
+            'path' => class_exists(Storage::class) ? $relativePath : $cachePath,
+            'disk' => $diskName,
             'count' => count($index['booklet_pages'] ?? []),
             'created_at' => (string) ($index['created_at'] ?? ''),
             'updated_at' => (string) ($index['updated_at'] ?? ''),
         ];
     }
 
-    public function loadBookletPageIndexJsonByAssessmentIds(array $assessment_ids, ?string $savePath = null): ?array
+    public function loadBookletPageIndexJsonByAssessmentIds(array $assessment_ids, ?string $savePath = null, ?string $disk = null): ?array
     {
         $cacheKey = $this->getBookletPageCacheKey($assessment_ids);
         $cachePath = $this->resolveBookletPageSavePath($savePath, $cacheKey);
-        if (!is_file($cachePath)) {
-            return null;
+        $relativePath = $this->resolveBookletPageRelativePath($savePath, $cacheKey);
+        $diskName = $this->resolveDiskName($disk);
+
+        if (class_exists(Storage::class)) {
+            if (!Storage::disk($diskName)->exists($relativePath)) {
+                return null;
+            }
+
+            $raw = Storage::disk($diskName)->get($relativePath);
+        } else {
+            if (!is_file($cachePath)) {
+                return null;
+            }
+
+            $raw = file_get_contents($cachePath);
         }
 
-        $raw = file_get_contents($cachePath);
         if ($raw === false || trim($raw) === '') {
             return null;
         }
@@ -169,10 +191,10 @@ class Crowdmark
         return $decoded;
     }
 
-    private function getOrBuildBookletPageIndex(array $assessment_ids, bool $forceRefresh = false, ?string $savePath = null): array
+    private function getOrBuildBookletPageIndex(array $assessment_ids, bool $forceRefresh = false, ?string $savePath = null, ?string $disk = null): array
     {
         $cacheKey = $this->getBookletPageCacheKey($assessment_ids);
-        $cached = $this->loadBookletPageIndexJsonByAssessmentIds($assessment_ids, $savePath);
+        $cached = $this->loadBookletPageIndexJsonByAssessmentIds($assessment_ids, $savePath, $disk);
 
         if (!$forceRefresh) {
             if (is_array($cached) && isset($cached['booklet_pages']) && is_array($cached['booklet_pages'])) {
@@ -198,9 +220,15 @@ class Crowdmark
         );
 
         $cachePath = $this->resolveBookletPageSavePath($savePath, $cacheKey);
+        $relativePath = $this->resolveBookletPageRelativePath($savePath, $cacheKey);
+        $diskName = $this->resolveDiskName($disk);
         $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if ($json !== false) {
-            file_put_contents($cachePath, $json);
+            if (class_exists(Storage::class)) {
+                Storage::disk($diskName)->put($relativePath, $json);
+            } else {
+                file_put_contents($cachePath, $json);
+            }
         }
 
         return $index;
@@ -285,14 +313,32 @@ class Crowdmark
 
     private function resolveBookletPageSavePath(?string $savePath, string $cacheKey): string
     {
+        $normalized = $this->resolveBookletPageRelativePath($savePath, $cacheKey);
+
+        $base = function_exists('storage_path')
+            ? storage_path('app')
+            : rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR);
+
+        $targetPath = rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $normalized);
+        $targetDirectory = dirname($targetPath);
+
+        if (!is_dir($targetDirectory)) {
+            @mkdir($targetDirectory, 0755, true);
+        }
+
+        return $targetPath;
+    }
+
+    private function resolveBookletPageRelativePath(?string $savePath, string $cacheKey): string
+    {
         if ($savePath === null || trim($savePath) === '') {
-            return $this->getBookletPageCacheFilePath($cacheKey);
+            return 'crowdmark-cache/' . $cacheKey . '.json';
         }
 
         $normalized = str_replace('\\', '/', trim($savePath));
         $normalized = ltrim($normalized, '/');
         if ($normalized === '') {
-            return $this->getBookletPageCacheFilePath($cacheKey);
+            return 'crowdmark-cache/' . $cacheKey . '.json';
         }
 
         foreach (explode('/', $normalized) as $segment) {
@@ -309,18 +355,24 @@ class Crowdmark
             $normalized .= '.json';
         }
 
-        $base = function_exists('storage_path')
-            ? storage_path('app')
-            : rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR);
+        return $normalized;
+    }
 
-        $targetPath = rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $normalized);
-        $targetDirectory = dirname($targetPath);
-
-        if (!is_dir($targetDirectory)) {
-            @mkdir($targetDirectory, 0755, true);
+    private function resolveDiskName(?string $disk): string
+    {
+        $normalized = trim((string) $disk);
+        if ($normalized === '') {
+            return 'local';
         }
 
-        return $targetPath;
+        if (function_exists('config')) {
+            $disks = config('filesystems.disks');
+            if (is_array($disks) && !array_key_exists($normalized, $disks)) {
+                throw new \InvalidArgumentException('Invalid disk: ' . $normalized);
+            }
+        }
+
+        return $normalized;
     }
 
     //=================================
@@ -571,10 +623,10 @@ class Crowdmark
      * @param  int      $maxPage  Highest page number to consider (inclusive). Default 39.
      * @param  string|null $jsonPath Optional path (relative to storage/app) for booklet/page JSON cache.
      */
-    public function generateOddPagesPdfZip(array $assessment_ids, int $maxPage = 39, ?string $jsonPath = null): string
+    public function generateOddPagesPdfZip(array $assessment_ids, int $maxPage = 39, ?string $jsonPath = null, ?string $jsonDisk = null): string
     {
         $cacheKey = $this->getBookletPageCacheKey($assessment_ids);
-        $baselineIndex = $this->loadBookletPageIndexJsonByAssessmentIds($assessment_ids, $jsonPath);
+        $baselineIndex = $this->loadBookletPageIndexJsonByAssessmentIds($assessment_ids, $jsonPath, $jsonDisk);
         $index = $this->buildBookletPageIndex($assessment_ids);
         $index['cache_key'] = $cacheKey;
         if (is_array($baselineIndex) && isset($baselineIndex['created_at'])) {
@@ -771,7 +823,13 @@ class Crowdmark
         }
 
         $cachePath = $this->resolveBookletPageSavePath($jsonPath, $cacheKey);
-        if (file_put_contents($cachePath, $json) === false) {
+        $relativePath = $this->resolveBookletPageRelativePath($jsonPath, $cacheKey);
+        $diskName = $this->resolveDiskName($jsonDisk);
+        if (class_exists(Storage::class)) {
+            if (!Storage::disk($diskName)->put($relativePath, $json)) {
+                throw new \RuntimeException('Failed to write refreshed booklet/page JSON cache to disk.');
+            }
+        } elseif (file_put_contents($cachePath, $json) === false) {
             throw new \RuntimeException('Failed to write refreshed booklet/page JSON cache to disk.');
         }
 
@@ -926,9 +984,9 @@ class Crowdmark
         }
     }
 
-    public function downloadPagesByUuid(array $assessment_ids, string $page_uuid, ?string $jsonPath = null)
+    public function downloadPagesByUuid(array $assessment_ids, string $page_uuid, ?string $jsonPath = null, ?string $jsonDisk = null)
     {
-        $index = $this->getOrBuildBookletPageIndex($assessment_ids, false, $jsonPath);
+        $index = $this->getOrBuildBookletPageIndex($assessment_ids, false, $jsonPath, $jsonDisk);
         $normalizedRequestedUuid = strtolower(trim($page_uuid));
         if (preg_match('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i', $normalizedRequestedUuid, $requestedMatch) === 1) {
             $normalizedRequestedUuid = strtolower($requestedMatch[0]);

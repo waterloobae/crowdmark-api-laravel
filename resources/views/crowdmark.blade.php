@@ -20,6 +20,10 @@
         <label for="json_path">Save path <small>(optional, relative to storage/app)</small></label><br>
         <input id="json_path" name="json_path" type="text" size="60" placeholder="crowdmark-cache/custom/booklet-pages.json">
     </div>
+    <div>
+        <label for="json_disk">JSON disk <small>(optional, default: local)</small></label><br>
+        <input id="json_disk" name="json_disk" type="text" size="60" placeholder="local">
+    </div>
     <br>
     <button type="submit" id="json-submit-btn">Save JSON Cache</button>
 </form>
@@ -47,6 +51,18 @@
     <div>
         <label for="json_path">Booklet/Page JSON path <small>(optional, relative to storage/app)</small></label><br>
         <input id="json_path" name="json_path" type="text" size="60" placeholder="crowdmark-cache/custom/booklet-pages.json">
+    </div>
+    <div>
+        <label for="single_json_disk">JSON disk <small>(optional, default: local)</small></label><br>
+        <input id="single_json_disk" name="json_disk" type="text" size="60" placeholder="local">
+    </div>
+    <div>
+        <label for="pdf_save_path">PDF save path <small>(optional, relative to storage/app)</small></label><br>
+        <input id="pdf_save_path" name="pdf_save_path" type="text" size="60" placeholder="crowdmark-pdfs/custom/single-page.pdf">
+    </div>
+    <div>
+        <label for="pdf_disk">PDF disk <small>(optional, default: local)</small></label><br>
+        <input id="pdf_disk" name="pdf_disk" type="text" size="60" placeholder="local">
     </div>
     <br>
     <button type="submit" id="submit-btn">Generate PDF</button>
@@ -77,8 +93,16 @@
         <input id="zip_json_path" name="json_path" type="text" size="60" placeholder="crowdmark-cache/custom/booklet-pages.json">
     </div>
     <div>
+        <label for="zip_json_disk">JSON disk <small>(optional, default: local)</small></label><br>
+        <input id="zip_json_disk" name="json_disk" type="text" size="60" placeholder="local">
+    </div>
+    <div>
         <label for="zip_save_path">ZIP save path <small>(optional, relative to storage/app)</small></label><br>
         <input id="zip_save_path" name="zip_save_path" type="text" size="60" placeholder="crowdmark-pdfs/custom/odd-pages.zip">
+    </div>
+    <div>
+        <label for="zip_disk">ZIP disk <small>(optional, default: local)</small></label><br>
+        <input id="zip_disk" name="zip_disk" type="text" size="60" placeholder="local">
     </div>
     <br>
     <button type="submit" id="zip-submit-btn">Generate ZIP</button>

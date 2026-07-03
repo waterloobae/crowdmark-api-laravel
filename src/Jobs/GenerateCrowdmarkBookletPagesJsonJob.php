@@ -23,17 +23,19 @@ class GenerateCrowdmarkBookletPagesJsonJob implements ShouldQueue
         public readonly array $assessmentIds,
         public readonly bool $forceRefresh,
         public readonly ?string $jsonPath = null,
+        public readonly ?string $jsonDisk = null,
     ) {}
 
     public function handle(): void
     {
         $crowdmark = new Crowdmark();
-        $saved = $crowdmark->saveBookletPageIndexJson($this->assessmentIds, $this->forceRefresh, $this->jsonPath);
+        $saved = $crowdmark->saveBookletPageIndexJson($this->assessmentIds, $this->forceRefresh, $this->jsonPath, $this->jsonDisk);
 
         Cache::put("crowdmark_json_{$this->token}", [
             'status' => 'done',
             'cache_key' => $saved['cache_key'],
             'path' => $saved['path'],
+            'disk' => $saved['disk'] ?? 'local',
             'count' => $saved['count'],
             'created_at' => $saved['created_at'],
         ], now()->addHours(24));

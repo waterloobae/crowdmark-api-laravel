@@ -26,30 +26,31 @@ class GenerateCrowdmarkOddPagesPdfJob implements ShouldQueue
         public readonly array $assessmentIds,
         public readonly int $maxPage = 39,
         public readonly ?string $jsonPath = null,
+        public readonly ?string $jsonDisk = null,
         public readonly ?string $zipSavePath = null,
+        public readonly ?string $outputDisk = null,
     ) {}
 
     public function handle(): void
     {
         $crowdmark = new Crowdmark();
 
-        $zipPath = $crowdmark->generateOddPagesPdfZip($this->assessmentIds, $this->maxPage, $this->jsonPath);
+        $zipPath = $crowdmark->generateOddPagesPdfZip($this->assessmentIds, $this->maxPage, $this->jsonPath, $this->jsonDisk);
         $destinationRelativePath = $this->resolveZipRelativePath($this->zipSavePath);
-        $destinationAbsolutePath = Storage::path($destinationRelativePath);
+        $disk = $this->resolveDiskName($this->outputDisk);
 
         try {
-            $destinationDir = dirname($destinationAbsolutePath);
-            if (!is_dir($destinationDir) && !mkdir($destinationDir, 0755, true) && !is_dir($destinationDir)) {
-                throw new \RuntimeException('Unable to create destination directory for ZIP output.');
+            $stream = @fopen($zipPath, 'rb');
+            if ($stream === false) {
+                throw new \RuntimeException('Unable to open generated ZIP for persistence.');
             }
 
-            // Prefer rename to avoid copying bytes in PHP memory; fall back to copy across filesystems.
-            if (!@rename($zipPath, $destinationAbsolutePath)) {
-                if (!@copy($zipPath, $destinationAbsolutePath)) {
+            try {
+                if (!Storage::disk($disk)->put($destinationRelativePath, $stream)) {
                     throw new \RuntimeException('Unable to persist generated ZIP to storage.');
                 }
-
-                @unlink($zipPath);
+            } finally {
+                fclose($stream);
             }
         } finally {
             if (file_exists($zipPath)) {
@@ -58,6 +59,7 @@ class GenerateCrowdmarkOddPagesPdfJob implements ShouldQueue
         }
 
         Cache::put("crowdmark_pdf_path_{$this->token}", $destinationRelativePath, now()->addHours(24));
+        Cache::put("crowdmark_pdf_disk_{$this->token}", $disk, now()->addHours(24));
         Cache::put("crowdmark_pdf_{$this->token}", 'done', now()->addHours(24));
     }
 
@@ -90,6 +92,20 @@ class GenerateCrowdmarkOddPagesPdfJob implements ShouldQueue
 
         if (pathinfo($normalized, PATHINFO_EXTENSION) === '') {
             $normalized .= '.zip';
+        }
+
+        return $normalized;
+    }
+
+    private function resolveDiskName(?string $disk): string
+    {
+        $normalized = trim((string) $disk);
+        if ($normalized === '') {
+            $normalized = 'local';
+        }
+
+        if (!is_array(config('filesystems.disks')) || !array_key_exists($normalized, config('filesystems.disks'))) {
+            throw new \InvalidArgumentException('Invalid output disk: ' . $normalized);
         }
 
         return $normalized;

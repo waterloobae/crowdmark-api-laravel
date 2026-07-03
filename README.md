@@ -115,11 +115,12 @@ Route::post('/crowdmark/save-booklet-pages-json', function (Request $request) {
 
     $forceRefresh = filter_var($request->input('force_refresh', false), FILTER_VALIDATE_BOOL);
     $jsonPath = trim((string) $request->input('json_path', '')) ?: null;
+    $jsonDisk = trim((string) $request->input('json_disk', '')) ?: null;
 
     $token = \Illuminate\Support\Str::uuid()->toString();
     Cache::put("crowdmark_json_{$token}", ['status' => 'pending'], now()->addHours(24));
 
-    GenerateCrowdmarkBookletPagesJsonJob::dispatch($token, $assessmentIds, $forceRefresh, $jsonPath);
+    GenerateCrowdmarkBookletPagesJsonJob::dispatch($token, $assessmentIds, $forceRefresh, $jsonPath, $jsonDisk);
 
     return response()->json(['token' => $token]);
 })->name('crowdmark.save-booklet-pages-json');
@@ -142,6 +143,7 @@ Route::get('/crowdmark/json-status/{token}', function (string $token) {
         return response()->json([
             'status' => 'done',
             'cache_key' => $cacheKey,
+            'disk' => (string) ($raw['disk'] ?? 'local'),
             'count' => (int) ($raw['count'] ?? 0),
             'created_at' => (string) ($raw['created_at'] ?? ''),
             'download_url' => $savedPath !== ''
@@ -182,12 +184,32 @@ Route 5. Download JSON cache by token (custom json_path support).
 Route::get('/crowdmark/booklet-pages-json-token/{token}', function (string $token) {
     $raw = Cache::get("crowdmark_json_{$token}");
     $path = (string) ($raw['path'] ?? '');
+    $disk = trim((string) ($raw['disk'] ?? 'local'));
 
-    if (!is_array($raw) || ($raw['status'] ?? '') !== 'done' || $path === '' || !is_file($path)) {
+    if (!is_array($raw) || ($raw['status'] ?? '') !== 'done' || $path === '') {
         abort(404, 'JSON cache file not ready.');
     }
 
-    return response()->download($path, basename($path) ?: 'crowdmark_booklet_pages.json', [
+    // Backward compatibility for old absolute-path payloads.
+    if (is_file($path)) {
+        return response()->download($path, basename($path) ?: 'crowdmark_booklet_pages.json', [
+            'Content-Type' => 'application/json',
+        ]);
+    }
+
+    if (!Storage::disk($disk)->exists($path)) {
+        abort(404, 'JSON cache file not found.');
+    }
+
+    return response()->streamDownload(function () use ($disk, $path): void {
+        $stream = Storage::disk($disk)->readStream($path);
+        if ($stream === false) {
+            throw new \RuntimeException('Failed to open JSON stream.');
+        }
+
+        fpassthru($stream);
+        fclose($stream);
+    }, basename($path) ?: 'crowdmark_booklet_pages.json', [
         'Content-Type' => 'application/json',
     ]);
 })->name('crowdmark.download-booklet-pages-json-by-token');
@@ -200,15 +222,31 @@ Route::post('/crowdmark/download-pages', function (Request $request) {
     $assessmentIds = array_values(array_filter(
         array_map('trim', explode(',', $request->input('assessment_ids', '')))
     ));
+    $pageUuid = trim((string) $request->input('page_uuid', ''));
+    $jsonPath = trim((string) $request->input('json_path', '')) ?: null;
+    $jsonDisk = trim((string) $request->input('json_disk', '')) ?: null;
+    $pdfSavePath = trim((string) $request->input('pdf_save_path', '')) ?: null;
+    $pdfDisk = trim((string) $request->input('pdf_disk', '')) ?: null;
 
     if (empty($assessmentIds)) {
         return response()->json(['error' => 'No assessment IDs provided.'], 422);
+    }
+    if ($pageUuid === '') {
+        return response()->json(['error' => 'No page UUID provided.'], 422);
     }
 
     $token = \Illuminate\Support\Str::uuid()->toString();
     Cache::put("crowdmark_pdf_{$token}", 'pending', now()->addHours(2));
 
-    GenerateCrowdmarkPagesPdfJob::dispatch($token, $assessmentIds, (string) $request->input('page', '1'));
+    GenerateCrowdmarkPagesPdfJob::dispatch(
+        $token,
+        $assessmentIds,
+        $pageUuid,
+        $jsonPath,
+        $jsonDisk,
+        $pdfSavePath,
+        $pdfDisk,
+    );
 
     return response()->json(['token' => $token]);
 })->name('crowdmark.download-pages');
@@ -241,24 +279,36 @@ Route::get('/crowdmark/pdf-download/{token}', function (string $token) {
         abort(404, 'PDF not ready.');
     }
 
-    $path = "crowdmark-pdfs/{$token}.pdf";
-    if (!Storage::exists($path)) {
+    $path = (string) Cache::get("crowdmark_pdf_path_{$token}", "crowdmark-pdfs/{$token}.pdf");
+    $disk = (string) Cache::get("crowdmark_pdf_disk_{$token}", 'local');
+    if (!Storage::disk($disk)->exists($path)) {
         abort(404, 'PDF file missing.');
     }
 
-    return response()->download(Storage::path($path), "pages_{$token}.pdf", [
-        'Content-Type' => 'application/pdf',
-    ]);
+    return response()->streamDownload(function () use ($disk, $path): void {
+        $stream = Storage::disk($disk)->readStream($path);
+        if ($stream === false) {
+            throw new \RuntimeException('Failed to open PDF stream.');
+        }
+
+        fpassthru($stream);
+        fclose($stream);
+    }, basename($path) ?: "pages_{$token}.pdf", ['Content-Type' => 'application/pdf']);
 })->name('crowdmark.pdf-download');
 ```
 
-Route 9. Queue odd-pages ZIP generation (supports baseline json_path + zip_save_path).
+Route 9. Queue odd-pages ZIP generation (supports json_path/json_disk baseline + zip_save_path/zip_disk output).
 
 ```php
 Route::post('/crowdmark/download-odd-pages', function (Request $request) {
     $assessmentIds = array_values(array_filter(
         array_map('trim', explode(',', $request->input('assessment_ids', '')))
     ));
+
+    $jsonPath = trim((string) $request->input('json_path', '')) ?: null;
+    $jsonDisk = trim((string) $request->input('json_disk', '')) ?: null;
+    $zipSavePath = trim((string) $request->input('zip_save_path', '')) ?: null;
+    $zipDisk = trim((string) $request->input('zip_disk', '')) ?: null;
 
     if (empty($assessmentIds)) {
         return response()->json(['error' => 'No assessment IDs provided.'], 422);
@@ -271,8 +321,10 @@ Route::post('/crowdmark/download-odd-pages', function (Request $request) {
         $token,
         $assessmentIds,
         (int) $request->input('max_page', 39),
-        trim((string) $request->input('json_path', '')) ?: null,
-        trim((string) $request->input('zip_save_path', '')) ?: null,
+        $jsonPath,
+        $jsonDisk,
+        $zipSavePath,
+        $zipDisk,
     );
 
     return response()->json(['token' => $token]);
@@ -289,13 +341,20 @@ Route::get('/crowdmark/zip-download/{token}', function (string $token) {
     }
 
     $path = (string) Cache::get("crowdmark_pdf_path_{$token}", "crowdmark-pdfs/{$token}.zip");
-    if (!Storage::exists($path)) {
+    $disk = (string) Cache::get("crowdmark_pdf_disk_{$token}", 'local');
+    if (!Storage::disk($disk)->exists($path)) {
         abort(404, 'ZIP file missing.');
     }
 
-    return response()->download(Storage::path($path), basename($path) ?: "odd_pages_{$token}.zip", [
-        'Content-Type' => 'application/zip',
-    ]);
+    return response()->streamDownload(function () use ($disk, $path): void {
+        $stream = Storage::disk($disk)->readStream($path);
+        if ($stream === false) {
+            throw new \RuntimeException('Failed to open ZIP stream.');
+        }
+
+        fpassthru($stream);
+        fclose($stream);
+    }, basename($path) ?: "odd_pages_{$token}.zip", ['Content-Type' => 'application/zip']);
 })->name('crowdmark.zip-download');
 ```
 
@@ -315,7 +374,20 @@ Route::get('/crowdmark/zip-download/{token}', function (string $token) {
     </label>
 
     <input name="json_path" type="text" placeholder="crowdmark-cache/custom/booklet-pages.json">
+    <input name="json_disk" type="text" placeholder="local">
     <button type="submit">Save JSON Cache</button>
+</form>
+
+<h2>Single page by UUID</h2>
+<form id="pdf-form">
+    @csrf
+    <textarea name="assessment_ids" rows="3" cols="60"></textarea>
+    <input name="page_uuid" type="text" placeholder="page UUID">
+    <input name="json_path" type="text" placeholder="crowdmark-cache/custom/booklet-pages.json">
+    <input name="json_disk" type="text" placeholder="local">
+    <input name="pdf_save_path" type="text" placeholder="crowdmark-pdfs/custom/single-page.pdf">
+    <input name="pdf_disk" type="text" placeholder="local">
+    <button type="submit">Generate PDF</button>
 </form>
 
 <h2>All odd pages - ZIP of booklet-based PDFs</h2>
@@ -324,7 +396,9 @@ Route::get('/crowdmark/zip-download/{token}', function (string $token) {
     <textarea name="assessment_ids" rows="3" cols="60"></textarea>
     <input name="max_page" type="number" min="1" value="39">
     <input name="json_path" type="text" placeholder="crowdmark-cache/custom/booklet-pages.json">
+    <input name="json_disk" type="text" placeholder="local">
     <input name="zip_save_path" type="text" placeholder="crowdmark-pdfs/custom/odd-pages.zip">
+    <input name="zip_disk" type="text" placeholder="local">
     <button type="submit">Generate ZIP</button>
 </form>
 ```
