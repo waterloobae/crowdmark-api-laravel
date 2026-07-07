@@ -7,6 +7,7 @@ use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Waterloobae\CrowdmarkApiLaravel\Crowdmark;
+use Waterloobae\CrowdmarkApiLaravel\Notifications\OddPagesZipJobStatusNotification;
 
 class GenerateCrowdmarkOddPagesPdfJob implements ShouldQueue
 {
@@ -29,6 +30,7 @@ class GenerateCrowdmarkOddPagesPdfJob implements ShouldQueue
         public readonly ?string $jsonDisk = null,
         public readonly ?string $zipSavePath = null,
         public readonly ?string $outputDisk = null,
+        public readonly ?string $requestingUserId = null,
     ) {}
 
     public function handle(): void
@@ -66,6 +68,37 @@ class GenerateCrowdmarkOddPagesPdfJob implements ShouldQueue
     public function failed(\Throwable $e): void
     {
         Cache::put("crowdmark_pdf_{$this->token}", 'failed:' . $e->getMessage(), now()->addHours(2));
+        $this->notifyRequestingUser($e);
+    }
+
+    private function notifyRequestingUser(\Throwable $e): void
+    {
+        if ($this->requestingUserId === null || $this->requestingUserId === '') {
+            return;
+        }
+
+        $modelClass = config('auth.providers.users.model');
+        if (!is_string($modelClass) || $modelClass === '' || !class_exists($modelClass)) {
+            return;
+        }
+
+        if (!method_exists($modelClass, 'query')) {
+            return;
+        }
+
+        $user = $modelClass::query()->find($this->requestingUserId);
+        if ($user === null || !method_exists($user, 'notify')) {
+            return;
+        }
+
+        $status = $e instanceof \UnderflowException ? 'notice' : 'failed';
+        $user->notify(new OddPagesZipJobStatusNotification(
+            $this->token,
+            $status,
+            $e->getMessage(),
+            $this->assessmentIds,
+            $this->maxPage,
+        ));
     }
 
     private function resolveZipRelativePath(?string $zipSavePath): string

@@ -251,7 +251,8 @@ Route::post('/crowdmark/download-odd-pages', function (Request $request) {
     $token = \Illuminate\Support\Str::uuid()->toString();
     Cache::put("crowdmark_pdf_{$token}", 'pending', now()->addHours(24));
 
-    GenerateCrowdmarkOddPagesPdfJob::dispatch($token, $assessmentIds, $maxPage, $jsonPath, $jsonDisk, $zipSavePath, $zipDisk);
+    $requestingUserId = $request->user()?->getAuthIdentifier();
+    GenerateCrowdmarkOddPagesPdfJob::dispatch($token, $assessmentIds, $maxPage, $jsonPath, $jsonDisk, $zipSavePath, $zipDisk, $requestingUserId !== null ? (string) $requestingUserId : null);
 
     return response()->json(['token' => $token]);
 })->name('crowdmark.download-odd-pages');

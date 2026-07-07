@@ -687,7 +687,7 @@ class Crowdmark
         }
 
         if (empty($booklets)) {
-            throw new \RuntimeException('No new or updated odd pages were found compared to baseline JSON.');
+            throw new \UnderflowException('No new or updated odd pages were found compared to baseline JSON.');
         }
 
         $booklets = array_values($booklets);
@@ -738,7 +738,7 @@ class Crowdmark
                 $pdf->Close();
             }
 
-            $zip->addFile($tmpPdfPath, sprintf('Odd_Booklet_Part_%03d.pdf', $partNumber));
+            $zip->addFile($tmpPdfPath, sprintf('Student_Forms_Part_%03d.pdf', $partNumber));
             $pdfTmpFiles[] = $tmpPdfPath;
 
             $partNumber++;

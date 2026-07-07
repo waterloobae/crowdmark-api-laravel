@@ -10,6 +10,7 @@ use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Support\Icons\Heroicon;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -267,7 +268,8 @@ class CrowdmarkExample extends Page
                 $zipDisk = trim((string) ($data['zip_disk'] ?? '')) ?: null;
 
                 Cache::put("crowdmark_pdf_{$token}", 'pending', now()->addHours(24));
-                GenerateCrowdmarkOddPagesPdfJob::dispatch($token, $assessmentIds, $maxPage, $jsonPath, $jsonDisk, $zipSavePath, $zipDisk);
+                $requestingUserId = Auth::id();
+                GenerateCrowdmarkOddPagesPdfJob::dispatch($token, $assessmentIds, $maxPage, $jsonPath, $jsonDisk, $zipSavePath, $zipDisk, $requestingUserId !== null ? (string) $requestingUserId : null);
 
                 $this->zipToken = $token;
 
