@@ -292,6 +292,13 @@ class CrowdmarkExample extends Page
                 $token = trim((string) $data['token']);
                 $status = Cache::get("crowdmark_pdf_{$token}");
 
+                if ($status === 'notice') {
+                    $message = (string) Cache::get("crowdmark_pdf_message_{$token}", 'ZIP job finished without generating a ZIP file.');
+                    Notification::make()->warning()->title($message)->send();
+
+                    return null;
+                }
+
                 if ($status !== 'done') {
                     Notification::make()->danger()->title('ZIP is not ready yet.')->send();
 

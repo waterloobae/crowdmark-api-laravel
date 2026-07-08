@@ -260,6 +260,11 @@ Route::post('/crowdmark/download-odd-pages', function (Request $request) {
 Route::get('/crowdmark/zip-download/{token}', function (string $token) {
     $status = Cache::get("crowdmark_pdf_{$token}");
 
+    if ($status === 'notice') {
+        $message = (string) Cache::get("crowdmark_pdf_message_{$token}", 'ZIP job finished without generating a ZIP file.');
+        abort(404, $message);
+    }
+
     if ($status !== 'done') {
         abort(404, 'ZIP not ready.');
     }

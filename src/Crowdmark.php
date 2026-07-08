@@ -646,7 +646,7 @@ class Crowdmark
      * @param  int      $maxPage  Highest page number to consider (inclusive). Default 39.
      * @param  string|null $jsonPath Optional path (relative to storage/app) for booklet/page JSON cache.
      */
-    public function generateOddPagesPdfZip(array $assessment_ids, int $maxPage = 39, ?string $jsonPath = null, ?string $jsonDisk = null): string
+    public function generateOddPagesPdfZip(array $assessment_ids, int $maxPage = 39, ?string $jsonPath = null, ?string $jsonDisk = null): array
     {
         $cacheKey = $this->getBookletPageCacheKey($assessment_ids);
         $baselineIndex = $this->loadBookletPageIndexJsonByAssessmentIds($assessment_ids, $jsonPath, $jsonDisk);
@@ -713,7 +713,11 @@ class Crowdmark
         }
 
         if (empty($booklets)) {
-            throw new \UnderflowException('No new or updated odd pages were found compared to baseline JSON.');
+            return [
+                'status' => 'notice',
+                'message' => 'No new or updated odd pages were found compared to baseline JSON.',
+                'zip_path' => null,
+            ];
         }
 
         $booklets = array_values($booklets);
@@ -859,7 +863,11 @@ class Crowdmark
             throw new \RuntimeException('Failed to write refreshed booklet/page JSON cache to disk.');
         }
 
-        return $zipPath;
+        return [
+            'status' => 'done',
+            'message' => 'Odd-pages ZIP generated successfully.',
+            'zip_path' => $zipPath,
+        ];
     }
 
     private function bookletPageBaselineKey(array $entry): string

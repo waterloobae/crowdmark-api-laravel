@@ -37,9 +37,27 @@ class GenerateCrowdmarkOddPagesPdfJob implements ShouldQueue
     {
         $crowdmark = new Crowdmark();
 
-        $zipPath = $crowdmark->generateOddPagesPdfZip($this->assessmentIds, $this->maxPage, $this->jsonPath, $this->jsonDisk);
+        $result = $crowdmark->generateOddPagesPdfZip($this->assessmentIds, $this->maxPage, $this->jsonPath, $this->jsonDisk);
+        $status = trim((string) ($result['status'] ?? 'done'));
+        $message = trim((string) ($result['message'] ?? ''));
+        $zipPath = $result['zip_path'] ?? null;
         $destinationRelativePath = $this->resolveZipRelativePath($this->zipSavePath);
         $disk = $this->resolveDiskName($this->outputDisk);
+
+        if ($message !== '') {
+            Cache::put("crowdmark_pdf_message_{$this->token}", $message, now()->addHours(24));
+        }
+
+        if ($status === 'notice') {
+            Cache::put("crowdmark_pdf_{$this->token}", 'notice', now()->addHours(24));
+            $this->notifyRequestingUserStatus('notice', $message !== '' ? $message : 'Odd-pages ZIP job finished without generating a ZIP file.');
+
+            return;
+        }
+
+        if (!is_string($zipPath) || $zipPath === '') {
+            throw new \RuntimeException('Odd-pages ZIP generation did not return a ZIP file path.');
+        }
 
         try {
             $stream = @fopen($zipPath, 'rb');
@@ -68,10 +86,10 @@ class GenerateCrowdmarkOddPagesPdfJob implements ShouldQueue
     public function failed(\Throwable $e): void
     {
         Cache::put("crowdmark_pdf_{$this->token}", 'failed:' . $e->getMessage(), now()->addHours(2));
-        $this->notifyRequestingUser($e);
+        $this->notifyRequestingUserStatus($e instanceof \UnderflowException ? 'notice' : 'failed', $e->getMessage());
     }
 
-    private function notifyRequestingUser(\Throwable $e): void
+    private function notifyRequestingUserStatus(string $status, string $message): void
     {
         if ($this->requestingUserId === null || $this->requestingUserId === '') {
             return;
@@ -91,11 +109,10 @@ class GenerateCrowdmarkOddPagesPdfJob implements ShouldQueue
             return;
         }
 
-        $status = $e instanceof \UnderflowException ? 'notice' : 'failed';
         $user->notify(new OddPagesZipJobStatusNotification(
             $this->token,
             $status,
-            $e->getMessage(),
+            $message,
             $this->assessmentIds,
             $this->maxPage,
         ));
