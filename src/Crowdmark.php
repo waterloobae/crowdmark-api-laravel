@@ -133,7 +133,7 @@ class Crowdmark
         $relativePath = $this->resolveBookletPageRelativePath($savePath, $cacheKey);
         $diskName = $this->resolveDiskName($disk);
 
-        $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        $json = json_encode($this->sanitizeIndexForStorage($index), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if ($json === false) {
             throw new \RuntimeException('Failed to encode booklet/page JSON cache.');
         }
@@ -224,6 +224,11 @@ class Crowdmark
         $diskName = $this->resolveDiskName($disk);
         $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if ($json !== false) {
+            $persistedIndex = $this->sanitizeIndexForStorage($index);
+            $json = json_encode($persistedIndex, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        }
+
+        if ($json !== false) {
             if (class_exists(Storage::class)) {
                 Storage::disk($diskName)->put($relativePath, $json);
             } else {
@@ -274,12 +279,30 @@ class Crowdmark
         $indexUpdatedAt = $this->deriveIndexUpdatedAt($bookletPages, $indexCreatedAt);
 
         return [
-            'version' => 1,
+            'version' => 2,
             'created_at' => $indexCreatedAt,
             'updated_at' => $indexUpdatedAt,
             'assessment_ids' => $normalizedAssessmentIds,
             'booklet_pages' => $bookletPages,
         ];
+    }
+
+    private function sanitizeIndexForStorage(array $index): array
+    {
+        if (!isset($index['booklet_pages']) || !is_array($index['booklet_pages'])) {
+            return $index;
+        }
+
+        foreach ($index['booklet_pages'] as $offset => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            unset($entry['page_url']);
+            $index['booklet_pages'][$offset] = $entry;
+        }
+
+        return $index;
     }
 
     private function normalizeAssessmentIds(array $assessment_ids): array
@@ -652,8 +675,9 @@ class Crowdmark
         foreach (($index['booklet_pages'] ?? []) as $entry) {
             $pageNumber = (int) ($entry['page_number'] ?? 0);
             $pageUrl = trim((string) ($entry['page_url'] ?? ''));
+            $pageEndpoint = $this->resolvePageEndpointFromEntry($entry);
 
-            if ($pageNumber <= 0 || $pageNumber > $maxPage || ($pageNumber % 2) === 0 || $pageUrl === '') {
+            if ($pageNumber <= 0 || $pageNumber > $maxPage || ($pageNumber % 2) === 0 || ($pageUrl === '' && $pageEndpoint === '')) {
                 continue;
             }
 
@@ -682,6 +706,8 @@ class Crowdmark
 
             $booklets[$bookletId]['pages'][] = [
                 'page_number' => $pageNumber,
+                'page_id' => (string) ($entry['page_id'] ?? ''),
+                'self_link' => (string) ($entry['self_link'] ?? ''),
                 'page_url' => $pageUrl,
             ];
         }
@@ -752,7 +778,7 @@ class Crowdmark
 
         foreach ($booklets as $booklet) {
             foreach ($booklet['pages'] as $page) {
-                $url = (string) $page['page_url'];
+                $url = $this->resolveFreshPageUrlFromEntry($page);
 
                 $imgPath = $this->fetchImageToTempFile($url);
                 if ($imgPath === null) {
@@ -817,7 +843,7 @@ class Crowdmark
             throw new \RuntimeException('No page images could be downloaded — the ZIP would be empty.');
         }
 
-        $json = json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        $json = json_encode($this->sanitizeIndexForStorage($index), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if ($json === false) {
             throw new \RuntimeException('Failed to encode refreshed booklet/page JSON cache.');
         }
@@ -984,6 +1010,47 @@ class Crowdmark
         }
     }
 
+    private function resolvePageEndpointFromEntry(array $entry): string
+    {
+        $selfLink = trim((string) ($entry['self_link'] ?? ''));
+        if ($selfLink !== '') {
+            $path = (string) (parse_url($selfLink, PHP_URL_PATH) ?: $selfLink);
+            if ($path !== '') {
+                return ltrim($path, '/');
+            }
+        }
+
+        $pageId = trim((string) ($entry['page_id'] ?? ''));
+        if ($pageId !== '') {
+            return 'api/pages/' . $pageId;
+        }
+
+        return '';
+    }
+
+    private function resolveFreshPageUrlFromEntry(array $entry): string
+    {
+        $endpoint = $this->resolvePageEndpointFromEntry($entry);
+        if ($endpoint === '') {
+            return trim((string) ($entry['page_url'] ?? ''));
+        }
+
+        try {
+            $api = new API($this->logger);
+            $api->exec($endpoint);
+            $response = $api->getResponse();
+            $freshUrl = trim((string) ($response->data->attributes->url ?? ''));
+
+            if ($freshUrl !== '') {
+                return $freshUrl;
+            }
+        } catch (\Throwable $e) {
+            $this->logger->setWarning('Page URL refresh failed for endpoint ' . $endpoint . '.');
+        }
+
+        return trim((string) ($entry['page_url'] ?? ''));
+    }
+
     public function downloadPagesByUuid(array $assessment_ids, string $page_uuid, ?string $jsonPath = null, ?string $jsonDisk = null)
     {
         $index = $this->getOrBuildBookletPageIndex($assessment_ids, false, $jsonPath, $jsonDisk);
@@ -1007,7 +1074,7 @@ class Crowdmark
             }
 
             if ($entryPageUuid === $normalizedRequestedUuid) {
-                $url = (string) ($entry['page_url'] ?? '');
+                $url = $this->resolveFreshPageUrlFromEntry($entry);
                 if ($url !== '') {
                     $pageUrls[] = $url;
                 }
