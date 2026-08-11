@@ -1115,8 +1115,26 @@ class Crowdmark
             }
 
             [$width, $height] = $imageSize;
-            $pdf->AddPage('P', [$width, $height]);
-            $pdf->Image($imagePath, 0, 0, $width, $height);
+            $pdf->AddPage('P', 'Letter');
+
+            $pageWidth = $pdf->GetPageWidth();
+            $pageHeight = $pdf->GetPageHeight();
+            $imageAspect = $width / $height;
+            $pageAspect = $pageWidth / $pageHeight;
+
+            if ($imageAspect > $pageAspect) {
+                $renderWidth = $pageWidth;
+                $renderHeight = $renderWidth / $imageAspect;
+                $offsetX = 0.0;
+                $offsetY = ($pageHeight - $renderHeight) / 2;
+            } else {
+                $renderHeight = $pageHeight;
+                $renderWidth = $renderHeight * $imageAspect;
+                $offsetX = ($pageWidth - $renderWidth) / 2;
+                $offsetY = 0.0;
+            }
+
+            $pdf->Image($imagePath, $offsetX, $offsetY, $renderWidth, $renderHeight);
         }
 
         foreach ($tempFiles as $tempFile) {
