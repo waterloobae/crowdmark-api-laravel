@@ -222,7 +222,10 @@ Route::post('/crowdmark/download-pages', function (Request $request) {
     $assessmentIds = array_values(array_filter(
         array_map('trim', explode(',', $request->input('assessment_ids', '')))
     ));
-    $pageUuid = trim((string) $request->input('page_uuid', ''));
+    $pageUuidInput = $request->input('page_uuid', []);
+    $pageUuids = is_array($pageUuidInput)
+        ? array_values(array_filter(array_map('trim', $pageUuidInput)))
+        : array_values(array_filter(preg_split('/[,\r\n]+/', trim((string) $pageUuidInput)) ?: []));
     $jsonPath = trim((string) $request->input('json_path', '')) ?: null;
     $jsonDisk = trim((string) $request->input('json_disk', '')) ?: null;
     $pdfSavePath = trim((string) $request->input('pdf_save_path', '')) ?: null;
@@ -231,7 +234,7 @@ Route::post('/crowdmark/download-pages', function (Request $request) {
     if (empty($assessmentIds)) {
         return response()->json(['error' => 'No assessment IDs provided.'], 422);
     }
-    if ($pageUuid === '') {
+    if (empty($pageUuids)) {
         return response()->json(['error' => 'No page UUID provided.'], 422);
     }
 
@@ -241,7 +244,7 @@ Route::post('/crowdmark/download-pages', function (Request $request) {
     GenerateCrowdmarkPagesPdfJob::dispatch(
         $token,
         $assessmentIds,
-        $pageUuid,
+        $pageUuids,
         $jsonPath,
         $jsonDisk,
         $pdfSavePath,
@@ -382,7 +385,7 @@ Route::get('/crowdmark/zip-download/{token}', function (string $token) {
 <form id="pdf-form">
     @csrf
     <textarea name="assessment_ids" rows="3" cols="60"></textarea>
-    <input name="page_uuid" type="text" placeholder="page UUID">
+    <textarea name="page_uuid" placeholder="page UUIDs, comma-separated"></textarea>
     <input name="json_path" type="text" placeholder="crowdmark-cache/custom/booklet-pages.json">
     <input name="json_disk" type="text" placeholder="local">
     <input name="pdf_save_path" type="text" placeholder="crowdmark-pdfs/custom/single-page.pdf">

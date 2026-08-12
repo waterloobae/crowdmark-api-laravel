@@ -141,8 +141,8 @@ class CrowdmarkExample extends Page
                     ->label('Assessment IDs (comma-separated)')
                     ->default('euclid-z-french-student-form')
                     ->required(),
-                TextInput::make('page_uuid')
-                    ->label('Page UUID')
+                Textarea::make('page_uuids')
+                    ->label('Page UUIDs (comma-separated)')
                     ->required(),
                 TextInput::make('json_path')
                     ->label('Booklet/Page JSON path (optional)')
@@ -159,9 +159,12 @@ class CrowdmarkExample extends Page
             ])
             ->action(function (array $data): void {
                 $assessmentIds = $this->parseAssessmentIds((string) ($data['assessment_ids'] ?? ''));
-                $pageUuid = trim((string) ($data['page_uuid'] ?? ''));
+                $pageUuids = array_values(array_filter(preg_split(
+                    '/[,\r\n]+/',
+                    trim((string) ($data['page_uuids'] ?? ''))
+                ) ?: []));
 
-                if ($assessmentIds === [] || $pageUuid === '') {
+                if ($assessmentIds === [] || $pageUuids === []) {
                     Notification::make()->danger()->title('Assessment IDs and page UUID are required.')->send();
 
                     return;
@@ -174,7 +177,7 @@ class CrowdmarkExample extends Page
                 $pdfDisk = trim((string) ($data['pdf_disk'] ?? '')) ?: null;
 
                 Cache::put("crowdmark_pdf_{$token}", 'pending', now()->addHours(2));
-                GenerateCrowdmarkPagesPdfJob::dispatch($token, $assessmentIds, $pageUuid, $jsonPath, $jsonDisk, $pdfSavePath, $pdfDisk);
+                GenerateCrowdmarkPagesPdfJob::dispatch($token, $assessmentIds, $pageUuids, $jsonPath, $jsonDisk, $pdfSavePath, $pdfDisk);
 
                 $this->pdfToken = $token;
 

@@ -1059,39 +1059,48 @@ class Crowdmark
         return trim((string) ($entry['page_url'] ?? ''));
     }
 
-    public function downloadPagesByUuid(array $assessment_ids, string $page_uuid, ?string $jsonPath = null, ?string $jsonDisk = null)
+    public function downloadPagesByUuid(array $assessment_ids, array $page_uuids, ?string $jsonPath = null, ?string $jsonDisk = null)
     {
         $index = $this->getOrBuildBookletPageIndex($assessment_ids, false, $jsonPath, $jsonDisk);
-        $normalizedRequestedUuid = strtolower(trim($page_uuid));
-        if (preg_match('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i', $normalizedRequestedUuid, $requestedMatch) === 1) {
-            $normalizedRequestedUuid = strtolower($requestedMatch[0]);
+        $normalizedRequestedUuids = [];
+        foreach ($page_uuids as $pageUuid) {
+            $normalizedPageUuid = strtolower(trim((string) $pageUuid));
+            if (preg_match('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i', $normalizedPageUuid, $requestedMatch) === 1) {
+                $normalizedPageUuid = strtolower($requestedMatch[0]);
+            }
+
+            if ($normalizedPageUuid !== '') {
+                $normalizedRequestedUuids[$normalizedPageUuid] = $normalizedPageUuid;
+            }
         }
 
         $pageUrls = [];
-        foreach (($index['booklet_pages'] ?? []) as $entry) {
-            $entryPageUuid = strtolower(trim((string) ($entry['page_id'] ?? '')));
-            if ($entryPageUuid === '') {
-                $selfLink = trim((string) ($entry['self_link'] ?? ''));
-                if ($selfLink !== '') {
-                    if (preg_match('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i', $selfLink, $entryMatch) === 1) {
-                        $entryPageUuid = strtolower($entryMatch[0]);
-                    } else {
-                        $entryPageUuid = strtolower(basename(parse_url($selfLink, PHP_URL_PATH) ?: $selfLink));
+        foreach ($normalizedRequestedUuids as $normalizedRequestedUuid) {
+            foreach (($index['booklet_pages'] ?? []) as $entry) {
+                $entryPageUuid = strtolower(trim((string) ($entry['page_id'] ?? '')));
+                if ($entryPageUuid === '') {
+                    $selfLink = trim((string) ($entry['self_link'] ?? ''));
+                    if ($selfLink !== '') {
+                        if (preg_match('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i', $selfLink, $entryMatch) === 1) {
+                            $entryPageUuid = strtolower($entryMatch[0]);
+                        } else {
+                            $entryPageUuid = strtolower(basename(parse_url($selfLink, PHP_URL_PATH) ?: $selfLink));
+                        }
                     }
                 }
-            }
 
-            if ($entryPageUuid === $normalizedRequestedUuid) {
-                $url = $this->resolveFreshPageUrlFromEntry($entry);
-                if ($url !== '') {
-                    $pageUrls[] = $url;
+                if ($entryPageUuid === $normalizedRequestedUuid) {
+                    $url = $this->resolveFreshPageUrlFromEntry($entry);
+                    if ($url !== '') {
+                        $pageUrls[] = $url;
+                    }
                 }
             }
         }
 
         if (empty($pageUrls)) {
             throw new \RuntimeException(
-                'No page URLs found for page UUID ' . $page_uuid . ' across ' .
+                'No page URLs found for page UUIDs ' . implode(', ', $page_uuids) . ' across ' .
                 count($index['booklet_pages'] ?? []) .
                 ' cached page rows. The UUID may not exist, or cached page data could not be loaded. UUIDs are read from page_id or derived from self_link; full /api/pages/... inputs are also accepted.'
             );
@@ -1144,7 +1153,7 @@ class Crowdmark
         }
 
         $dateTime = date("Ymd_His");
-        $fileName = "Page_" . $page_uuid . "_" . $dateTime . ".pdf";
+        $fileName = "Pages_" . count($pageUrls) . "_" . $dateTime . ".pdf";
         $pdfContent = $pdf->Output('S');
 
         return $this->downloadBinary(

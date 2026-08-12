@@ -147,7 +147,10 @@ Route::post('/crowdmark/download-pages', function (Request $request) {
     $assessmentIds = array_values(array_filter(
         array_map('trim', explode(',', $request->input('assessment_ids', '')))
     ));
-    $pageUuid = trim((string) $request->input('page_uuid', ''));
+    $pageUuidInput = $request->input('page_uuid', []);
+    $pageUuids = is_array($pageUuidInput)
+        ? array_values(array_filter(array_map('trim', $pageUuidInput)))
+        : array_values(array_filter(preg_split('/[,\r\n]+/', trim((string) $pageUuidInput)) ?: []));
     $jsonPath = trim((string) $request->input('json_path', ''));
     $jsonDisk = trim((string) $request->input('json_disk', ''));
     $pdfSavePath = trim((string) $request->input('pdf_save_path', ''));
@@ -157,7 +160,7 @@ Route::post('/crowdmark/download-pages', function (Request $request) {
         return response()->json(['error' => 'No assessment IDs provided.'], 422);
     }
 
-    if ($pageUuid === '') {
+    if (empty($pageUuids)) {
         return response()->json(['error' => 'No page UUID provided.'], 422);
     }
 
@@ -177,7 +180,7 @@ Route::post('/crowdmark/download-pages', function (Request $request) {
     $token = \Illuminate\Support\Str::uuid()->toString();
     Cache::put("crowdmark_pdf_{$token}", 'pending', now()->addHours(2));
 
-    GenerateCrowdmarkPagesPdfJob::dispatch($token, $assessmentIds, $pageUuid, $jsonPath, $jsonDisk, $pdfSavePath, $pdfDisk);
+    GenerateCrowdmarkPagesPdfJob::dispatch($token, $assessmentIds, $pageUuids, $jsonPath, $jsonDisk, $pdfSavePath, $pdfDisk);
 
     return response()->json(['token' => $token]);
 })->name('crowdmark.download-pages');

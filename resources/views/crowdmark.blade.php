@@ -35,7 +35,7 @@
 
 {{-- -- Single page download -- --}}
 <hr style="margin:2rem 0;">
-<h2>Download one page by UUID</h2>
+<h2>Download student form pages by UUID</h2>
 <p><small>Use the page UUID from the cached booklet/page JSON file. It can come from <code>page_id</code> or be derived from the tail of <code>self_link</code> (for older caches).</small></p>
 <form id="pdf-form">
     @csrf
@@ -45,8 +45,8 @@
             placeholder="euclid-z-french-student-form, ...">euclid-z-french-student-form</textarea>
     </div>
     <div>
-        <label for="page_uuid">Page UUID</label><br>
-        <input id="page_uuid" name="page_uuid" type="text" size="60" placeholder="page_id from cached JSON">
+        <label for="page_uuid">Page UUIDs <small>(comma-separated)</small></label><br>
+        <textarea id="page_uuid" name="page_uuid" rows="3" cols="60" placeholder="page_id values from cached JSON"></textarea>
     </div>
     <div>
         <label for="json_path">Booklet/Page JSON path <small>(optional, relative to storage/app)</small></label><br>
